@@ -1,0 +1,20 @@
+# Data pipeline (pipeline/*.py)
+pandas==3.0.1
+matplotlib==3.10.6
+openpyxl==3.1.5
+rapidfuzz==3.14.5
+
+# Embedding model + database (search.py, pipeline/load_properties.py)
+sentence-transformers==6.0.0
+psycopg2-binary==2.9.12
+pgvector==0.5.0
+
+# Required at runtime by nomic-embed-text-v1.5's custom model code
+# (trust_remote_code=True) - not imported directly by our own scripts, but
+# loading the model fails without it.
+einops==0.8.2
+
+# Optional: only needed to regenerate pipeline/eda_melbourne_housing.ipynb
+# from its .py source (see "Member B's tasks.md"). Not required to run
+# the pipeline itself.
+# jupytext==1.19.5

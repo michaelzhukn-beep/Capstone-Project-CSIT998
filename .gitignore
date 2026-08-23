@@ -1,0 +1,15 @@
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.env
+
+# Data files: mostly large and/or fully reproducible by running the
+# pipeline/ scripts in order (see "Member B's tasks.md"), so not worth
+# tracking. Exception: the DFFH rent report is a dated quarterly snapshot
+# (filename is quarter-specific) that would silently differ if re-fetched
+# later, and it's small + CC BY 4.0 licensed — so it's the one raw file we
+# keep in the repo.
+data/*
+!data/moving_annual_rent_by_suburb.xlsx
