@@ -9,15 +9,20 @@
 
 ## Now
 
-- [ ] **补一次基线提交。** `app/`、`tests/`、`docs/`、`AGENTS.md`、`CLAUDE.md`
-      及部分新增 `pipeline/` 脚本仍是 untracked,`git log` 只有 2 条旧提交。
-      普通 diff 看不到这些文件,新克隆也拿不到共享规则;须一并纳入基线。
-      需要所有者确认后再提交(`.env` 已 gitignore,确认 `data/` 的白名单规则符合预期)。
+- [ ] **决定基线提交要不要 push。** 本地已提交 `e382140`(97 文件)。
+      卡点:`data/planning.jsonl.gz` 71MB,过 GitHub 50MB 警告线,推上去就进历史,
+      移除要改写历史。选项:照推 / 改用 Git LFS / 把它移出白名单由脚本重建。
+- [ ] **清理 Docker 容器归属。** 现在 `docker compose up -d` 会重建那个已退出的
+      `capstone_postgres_old5432` 当 `db`,并把在跑的手工容器改名让路,两者争 15432。
+      要做的是:停掉并删除这两个容器,用 compose 重新拉起(卷 `capstone_pgdata`
+      共用,不丢数据),再验证 `python serve.py` 能连上。
 
 ## Next
 
-- [ ] 核对并统一数据库启动配置:当前容器暴露 15432,仓库 Compose 映射 5432;
-      查明差异来源并核对 `DB_DSN`,再验证文档中的重建步骤。
+- [ ] `app/api/server.py:102` 启动打印 `R²`,GBK 控制台下抛 `UnicodeEncodeError`
+      打死 lifespan(组员用 cmd 会踩)。让启动输出对非 UTF-8 终端安全。
+- [ ] `search.py` 与 `pipeline/load_properties.py` 的 DSN 仍是硬编码(端口已跟进到
+      15432)。改成从 `app.core.config` 读,消掉这两处副本。
 - [ ] **幻觉率评估:本系统 vs 纯 LLM。** 提案里承诺过,不能砍。前提已具备:
       `python -m eval.run_eval`(要 LLM,约 20 分钟);`--report` 可只重出报告。
 - [ ] `tests/test_api.py` 偶发失败定位(批量连跑约 1/24)。
@@ -36,6 +41,11 @@
 ## Done
 
 只保留最近、仍有参考价值的。更早的完整记录在 `NOTES_FOR_SUPERVISOR.md`。
+
+- [x] 基线提交(本地 `e382140`):助手本体 `app/`、`tests/`、`docs/`、`eval/`、
+      协作规则与数据快照入库;`_rhine_analysis/` 排除在外并加进 `.gitignore`。**未 push**
+- [x] 统一数据库端口:compose 改 `15432:5432`,README / `.env.example` /
+      两个硬编码脚本跟进。差异来源已查明 —— 在跑的容器是手工 `docker run` 起的
 
 - [x] 接入并由 Codex 核查共享记忆机制:统一 `AGENTS.md`、新会话恢复与自动交接;
       已核对代码/Git/文档,本次未重跑业务验收

@@ -67,13 +67,18 @@
 
 ## Known Issues
 
-- **仓库几乎没有提交历史。** `git log` 只有 2 条旧提交,`app/`、`tests/`、
-  `docs/`、`AGENTS.md`、`CLAUDE.md` 及部分新增 `pipeline/` 脚本仍是 untracked
-  (早期 pipeline 脚本已跟踪)。普通 `git diff` 不包含未跟踪文件;本地交接须直接
-  阅读它们,新克隆也不会取得这些代码和协作规则。基线提交仍待完成,见 TODO Now。
-- **数据库启动配置不一致。** 当前 `capstone_postgres` 容器映射 `15432 → 5432`,
-  但 `db/docker-compose.yml` 仍为 `5432:5432`(与现有提交一致)。当前运行配置的
-  来源尚未确认;重建容器前须核对端口与 `DB_DSN`,本次仅记录差异,未修改配置。
+- **基线提交已完成但尚未 push**(本地 `e382140`,97 个文件)。`data/planning.jsonl.gz`
+  有 71MB,超过 GitHub 50MB 警告线(硬上限 100MB),一旦推送就固化进历史,
+  之后只能改写历史才能移除。push 前需所有者确认这一点。
+- **`docker compose up -d` 目前会把库搞乱,不要直接跑。** 带 compose 标签的是
+  那个**已退出的** `capstone_postgres_old5432`;正在跑的 `capstone_postgres` 是手工
+  `docker run` 起的,没有标签。compose 会重建 old5432 当作 `db` 服务,同时把在跑的
+  容器改名让路,两者争同一个 15432 端口。数据在具名卷 `capstone_pgdata` 里,两个容器
+  共用,清理不会丢数据 —— 但清理动作(删掉这两个容器、让 compose 重新接管)未做。
+- **非 UTF-8 控制台下服务起不来。** `app/api/server.py:102` 启动时打印 `R²`,
+  在 GBK 控制台(中文 Windows 的 cmd 默认 cp936)抛 `UnicodeEncodeError`,
+  直接打死 lifespan。本机 PowerShell 是 UTF-8 所以看不到;组员的 cmd 会踩。
+  绕过:`PYTHONIOENCODING=utf-8`。
 - `tests/test_api.py` 偶发失败(批量连跑时约 1/24,曾表现为 rc=139 段错误),
   单独重跑无法复现。用 `PYTHONFAULTHANDLER=1` 捕获。
 - **未做:与纯 LLM 对比的幻觉率评估。** 提案里承诺过,前提已经具备。
