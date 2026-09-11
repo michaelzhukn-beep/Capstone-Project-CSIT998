@@ -13,3 +13,41 @@ __pycache__/
 # keep in the repo.
 data/*
 !data/moving_annual_rent_by_suburb.xlsx
+# Same reasoning for the amenities snapshot: pipeline/fetch_amenities.py pulls it
+# from the Overpass API, and OSM changes daily — re-fetching later would silently
+# give a different dataset than the one the system was demoed and evaluated on.
+# It's small (~300KB) and the point of the file is that queries never touch the
+# network, so it belongs in the repo. © OpenStreetMap contributors, ODbL.
+# Same again for the OSM geography snapshot (27 sources: stations, schools, shops,
+# major roads, rail lines, industrial land, ...) and the percentile baseline computed
+# from it. Both feed the amenity/abstract-attribute layer, both come from OSM, and
+# both must stay pinned to the version the system was evaluated on -- OSM changes
+# daily, so re-fetching later would silently give a different dataset. ~7MB together.
+# Regenerate with pipeline/fetch_osm.py then pipeline/build_context_baseline.py.
+!data/osm_points.csv
+!data/context_baseline.json
+# School catchment boundaries (Vic DoE / DataVic, CC BY 4.0) and LGA crime rates
+# (Crime Statistics Agency Victoria). Both are trimmed, derived snapshots -- small,
+# and pinned to the version the system was evaluated on. The 17MB raw crime .xlsx
+# stays out; fetch_crime_stats.py re-downloads it on demand.
+!data/school_zones.geojson
+!data/suburb_crime.csv
+
+# Vicmap Planning zones + overlays (Victorian Open Data Platform, CC BY 4.0).
+# 74MB gzipped -- big for a repo, but it is a pinned snapshot of a weekly-updated
+# source: re-fetching later would silently give different zone boundaries than the
+# ones the system was evaluated on, and every planning claim in the report is tied
+# to this exact snapshot. Regenerate with pipeline/fetch_planning.py.
+!data/planning.jsonl.gz
+# planning.cache.npz is NOT tracked: it is a WKB cache derived from the .jsonl.gz
+# purely to cut CLI start-up from 11.5s to 0.5s. It is 218MB, it rebuilds itself
+# automatically when missing or stale, and it carries no information the source
+# file does not already have.
+
+# 本地开发用的预览配置(Claude Code 的 Browser 面板),不属于交付物
+.claude/
+
+# _rhine_analysis/ 与本项目无关(约 11MB,3D + 音频 + 抓取脚本),疑似其他任务
+# 遗留在此。先排除在基线提交之外:一旦进了 Git 历史就只能改写历史才能拿掉。
+# 去留待所有者确认,见 docs/TODO.md。
+_rhine_analysis/

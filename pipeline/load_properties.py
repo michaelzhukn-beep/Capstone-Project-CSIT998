@@ -10,7 +10,9 @@ import torch
 from sentence_transformers import SentenceTransformer
 
 INPUT_CSV = "data/property_with_description.csv"
-DB_DSN = "postgresql://capstone:capstone@localhost:5432/capstone"
+# 端口与 db/docker-compose.yml 一致(宿主 15432 -> 容器 5432)。
+# 此处仍是硬编码,app/ 已改为从 app.core.config 读取;见 TODO。
+DB_DSN = "postgresql://capstone:capstone@localhost:15432/capstone"
 MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 BATCH_SIZE = 256
 

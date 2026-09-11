@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>栖所 QISUO — 布局重构效果图</title>
+<style>
+  :root{
+    --paper:#f4f2ec; --paper-2:#eceae2; --ink:#1c1c19; --ink-2:#6b6b63;
+    --line:#d8d5c9; --accent:#43503a; --accent-soft:#e3e8dc;
+    --mono:"JetBrains Mono","Courier New",monospace;
+    --sans:"PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--paper);color:var(--ink);font-family:var(--sans);
+       width:1600px;height:1000px;overflow:hidden;display:flex;flex-direction:column}
+
+  /* ── 1. 顶栏 ───────────────────────────── */
+  .topbar{height:56px;flex:none;display:flex;align-items:center;gap:32px;
+    padding:0 28px;border-bottom:1px solid var(--line);background:var(--paper)}
+  .brand{display:flex;align-items:baseline;gap:10px}
+  .brand .logo{font-size:20px;font-weight:700;letter-spacing:2px}
+  .brand .en{font-family:var(--mono);font-size:11px;color:var(--ink-2);letter-spacing:3px}
+  .nav{display:flex;gap:26px;margin-left:24px;font-size:13px}
+  .nav a{color:var(--ink-2);text-decoration:none}
+  .nav a.on{color:var(--ink);border-bottom:2px solid var(--accent);padding-bottom:3px}
+  .top-right{margin-left:auto;display:flex;gap:14px;align-items:center;
+    font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+  .pill{border:1px solid var(--line);padding:5px 12px;border-radius:2px}
+
+  /* ── 2. 查询控制台（一切的起点） ─────────── */
+  .console{flex:none;padding:18px 28px;border-bottom:1px solid var(--line);
+    background:var(--paper-2);display:flex;align-items:center;gap:16px}
+  .console .prompt{font-family:var(--mono);font-size:18px;color:var(--accent);font-weight:700}
+  .console .query{flex:1;font-size:17px;letter-spacing:.5px}
+  .console .query b{border-bottom:2px solid var(--accent)}
+  .console .exec{font-family:var(--mono);font-size:12px;background:var(--accent);
+    color:#fff;padding:8px 18px;border-radius:2px;letter-spacing:2px}
+  .console .hint{font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+
+  /* ── 3. 主区三栏 ───────────────────────── */
+  .main{flex:1;display:flex;min-height:0}
+
+  /* 3a 参数栏 */
+  .params{width:230px;flex:none;border-right:1px solid var(--line);
+    padding:20px 18px;background:var(--paper)}
+  .sec-title{font-family:var(--mono);font-size:11px;letter-spacing:3px;
+    color:var(--ink-2);margin:18px 0 10px}
+  .sec-title:first-child{margin-top:0}
+  .sec-title::before{content:"▪ ";color:var(--accent)}
+  .chip{display:inline-block;border:1px solid var(--line);border-radius:2px;
+    padding:4px 10px;font-size:12px;margin:0 6px 6px 0;color:var(--ink-2)}
+  .chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .range-row{font-family:var(--mono);font-size:12px;color:var(--ink);
+    display:flex;justify-content:space-between;margin-bottom:6px}
+  .bar{height:4px;background:var(--line);border-radius:2px;position:relative;margin-bottom:14px}
+  .bar i{position:absolute;left:0;top:0;bottom:0;width:62%;background:var(--accent);border-radius:2px}
+  .reset{font-family:var(--mono);font-size:11px;color:var(--ink-2);
+    border:1px dashed var(--line);text-align:center;padding:7px;margin-top:20px}
+
+  /* 3b 结果列 */
+  .results{flex:1;min-width:0;display:flex;flex-direction:column;border-right:1px solid var(--line)}
+  .conclusion{flex:none;padding:16px 24px;border-bottom:1px solid var(--line);
+    background:var(--accent-soft)}
+  .conclusion .head{font-size:15px;font-weight:700}
+  .conclusion .head span{font-family:var(--mono);color:var(--accent)}
+  .conclusion .sub{font-size:12px;color:var(--ink-2);margin-top:5px;line-height:1.6}
+  .cards{flex:1;overflow:hidden;padding:14px 24px;display:flex;flex-direction:column;gap:10px}
+  .card{display:flex;gap:16px;align-items:center;border:1px solid var(--line);
+    background:#fff;padding:12px 16px;border-radius:2px}
+  .card.hot{border-color:var(--accent);box-shadow:3px 3px 0 var(--accent-soft)}
+  .card .idx{font-family:var(--mono);font-size:20px;color:var(--ink-2);width:34px}
+  .card.hot .idx{color:var(--accent);font-weight:700}
+  .card .body{flex:1;min-width:0}
+  .card .addr{font-size:14px;font-weight:700}
+  .card .addr small{font-weight:400;color:var(--ink-2);margin-left:8px;font-size:12px}
+  .card .meta{font-family:var(--mono);font-size:11px;color:var(--ink-2);margin-top:5px}
+  .card .tags{margin-top:6px}
+  .card .tags i{font-style:normal;font-size:10px;border:1px solid var(--line);
+    padding:2px 7px;margin-right:5px;color:var(--ink-2);border-radius:2px}
+  .card .right{text-align:right;width:150px;flex:none}
+  .card .price{font-family:var(--mono);font-size:17px;font-weight:700}
+  .score{display:flex;align-items:center;gap:8px;justify-content:flex-end;margin-top:6px}
+  .score .lbl{font-family:var(--mono);font-size:10px;color:var(--ink-2)}
+  .score .track{width:70px;height:5px;background:var(--line);border-radius:2px}
+  .score .track i{display:block;height:100%;background:var(--accent);border-radius:2px}
+  .score .num{font-family:var(--mono);font-size:14px;font-weight:700;color:var(--accent)}
+  .more{flex:none;text-align:center;font-family:var(--mono);font-size:11px;
+    color:var(--ink-2);padding:8px 0 4px}
+
+  /* 3c 地图 */
+  .map{width:460px;flex:none;position:relative;background:#e9e7de}
+  .map svg{width:100%;height:100%;display:block}
+  .map .tag{position:absolute;font-family:var(--mono);font-size:10px;
+    letter-spacing:2px;color:var(--ink-2);background:rgba(244,242,236,.85);
+    padding:3px 8px;border:1px solid var(--line)}
+  .pin{position:absolute;transform:translate(-50%,-100%);text-align:center}
+  .pin .n{font-family:var(--mono);font-size:11px;font-weight:700;background:var(--ink);
+    color:#fff;width:24px;height:24px;line-height:24px;border-radius:50%;margin:0 auto}
+  .pin.hot .n{background:var(--accent);width:30px;height:30px;line-height:30px;font-size:13px}
+  .pin .stem{width:1px;height:8px;background:var(--ink);margin:0 auto}
+  .pin.hot .stem{background:var(--accent)}
+  .map .legend{position:absolute;left:14px;bottom:14px;font-family:var(--mono);
+    font-size:10px;color:var(--ink-2);background:rgba(244,242,236,.9);
+    border:1px solid var(--line);padding:8px 10px;line-height:1.8}
+
+  /* ── 4. 状态栏 ─────────────────────────── */
+  .statusbar{height:34px;flex:none;border-top:1px solid var(--line);
+    background:var(--ink);color:#b9b9ae;font-family:var(--mono);font-size:11px;
+    display:flex;align-items:center;gap:28px;padding:0 28px;letter-spacing:1px}
+  .statusbar .ok{color:#8fbf7f}
+  .statusbar .r{margin-left:auto}
+</style>
+</head>
+<body>
+
+<!-- 1 ── 顶栏：品牌 + 全局导航 + 轻操作 -->
+<header class="topbar">
+  <div class="brand"><span class="logo">栖所</span><span class="en">QISUO ARCHIVE</span></div>
+  <nav class="nav">
+    <a class="on" href="#">找房</a><a href="#">档案库</a><a href="#">地图模式</a><a href="#">关于</a>
+  </nav>
+  <div class="top-right"><span class="pill">收藏 · 3</span><span class="pill">ZH / EN</span></div>
+</header>
+
+<!-- 2 ── 查询控制台：用户的"问题"是一切的起点 -->
+<section class="console">
+  <span class="prompt">&gt;_</span>
+  <div class="query">靠近<b>墨尔本大学</b>，<b>安静</b>一点的公寓，预算 50 万以内</div>
+  <span class="hint">支持自然语言 / 点击修改条件</span>
+  <span class="exec">执行 ↵</span>
+</section>
+
+<!-- 3 ── 主区：参数 → 结果 → 地图，严格镜像"输入→答案→验证" -->
+<main class="main">
+
+  <!-- 3a 参数栏：所有筛选条件收拢在左，永远可见 -->
+  <aside class="params">
+    <div class="sec-title">预算 BUDGET</div>
+    <div class="range-row"><span>$0</span><span>≤ $500,000</span></div>
+    <div class="bar"><i></i></div>
+    <div class="sec-title">房型 TYPE</div>
+    <div><span class="chip on">公寓</span><span class="chip">House</span><span class="chip">Studio</span></div>
+    <div class="sec-title">安静分 QUIET ≥ 60</div>
+    <div class="range-row"><span>0</span><span>60+</span></div>
+    <div class="bar"><i style="width:60%"></i></div>
+    <div class="sec-title">到校距离 DISTANCE</div>
+    <div><span class="chip on">≤ 10 km</span><span class="chip">≤ 5 km</span><span class="chip">步行</span></div>
+    <div class="sec-title">排序 SORT</div>
+    <div><span class="chip on">安静分 ↓</span><span class="chip">价格 ↑</span><span class="chip">距离 ↑</span></div>
+    <div class="reset">重置全部参数 ⟲</div>
+  </aside>
+
+  <!-- 3b 结果列：先给结论，再给可比较的档案卡 -->
+  <section class="results">
+    <div class="conclusion">
+      <div class="head">▍结论：共 <span>5</span> 套符合，已按「安静分」从高到低排序</div>
+      <div class="sub">没有一套真正靠近墨大主校区，最近的是 03 号（3.3 km）。第 1、2 套安静度最高但通勤较远；预算最友好的是 05 号。</div>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="idx">01</div>
+        <div class="body">
+          <div class="addr">2/5 Carling Cl<small>Wyndham Vale</small></div>
+          <div class="meta">2卧 · 1卫 · 公寓 ｜ 距墨大 8.6 km ｜ 火车站 0.9 km</div>
+          <div class="tags"><i>公园旁</i><i>无夜间营业场所</i></div>
+        </div>
+        <div class="right">
+          <div class="price">$440,500</div>
+          <div class="score"><span class="lbl">安静分</span><span class="track"><i style="width:96%"></i></span><span class="num">96</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="idx">02</div>
+        <div class="body">
+          <div class="addr">E/32 Ravenwood Ave<small>Tarneit</small></div>
+          <div class="meta">2卧 · 1卫 · 公寓 ｜ 距墨大 9.1 km ｜ 火车站 1.4 km</div>
+          <div class="tags"><i>内街</i><i>低车流</i></div>
+        </div>
+        <div class="right">
+          <div class="price">$400,000</div>
+          <div class="score"><span class="lbl">安静分</span><span class="track"><i style="width:92%"></i></span><span class="num">92</span></div>
+        </div>
+      </div>
+      <div class="card hot">
+        <div class="idx">03</div>
+        <div class="body">
+          <div class="addr">3/41 Evrah Dr<small>Hoppers Crossing · 距校最近</small></div>
+          <div class="meta">2卧 · 1卫 · 公寓 ｜ 距墨大 3.3 km ｜ 火车站 1.1 km</div>
+          <div class="tags"><i>朝南</i><i>包家具</i><i>可约看</i></div>
+        </div>
+        <div class="right">
+          <div class="price">$406,500</div>
+          <div class="score"><span class="lbl">安静分</span><span class="track"><i style="width:91%"></i></span><span class="num">91</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="idx">04</div>
+        <div class="body">
+          <div class="addr">2/41 Higgins Rd<small>Hoppers Crossing</small></div>
+          <div class="meta">2卧 · 1卫 · 公寓 ｜ 距墨大 4.1 km ｜ 火车站 1.7 km</div>
+          <div class="tags"><i>顶层</i></div>
+        </div>
+        <div class="right">
+          <div class="price">$405,000</div>
+          <div class="score"><span class="lbl">安静分</span><span class="track"><i style="width:90%"></i></span><span class="num">90</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="idx">05</div>
+        <div class="body">
+          <div class="addr">15 Withy Ct<small>Meadow Heights · 价格最低</small></div>
+          <div class="meta">2卧 · 1卫 · 公寓 ｜ 距墨大 13.4 km ｜ 火车站 2.2 km</div>
+          <div class="tags"><i>现房</i></div>
+        </div>
+        <div class="right">
+          <div class="price">$363,500</div>
+          <div class="score"><span class="lbl">安静分</span><span class="track"><i style="width:89%"></i></span><span class="num">89</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="more">⌄ 换一批（还有 15 套）</div>
+  </section>
+
+  <!-- 3c 地图：空间验证，与列表编号一一对应 -->
+  <aside class="map">
+    <svg viewBox="0 0 460 760" preserveAspectRatio="xMidYMid slice">
+      <rect width="460" height="760" fill="#e9e7de"/>
+      <path d="M300 0 C 310 120, 290 200, 320 300 C 350 400, 330 520, 360 620 L 460 760 L 460 0 Z" fill="#dfe5d8"/>
+      <path d="M330 380 C 300 460, 340 560, 300 640 C 270 700, 290 740, 280 760 L 460 760 L 460 380 Z" fill="#cdd8d2"/>
+      <g stroke="#c9c6ba" stroke-width="1.5" fill="none">
+        <path d="M0 120 C 120 100, 260 140, 460 110"/>
+        <path d="M0 260 C 140 240, 300 280, 460 250"/>
+        <path d="M60 0 C 80 200, 40 400, 90 760"/>
+        <path d="M180 0 C 200 180, 160 420, 210 700"/>
+      </g>
+      <g stroke="#b9b5a6" stroke-width="3" fill="none">
+        <path d="M0 330 C 150 310, 320 350, 460 320"/>
+      </g>
+      <text x="360" y="700" font-family="monospace" font-size="11" fill="#8a948e">Port Phillip Bay</text>
+      <text x="200" y="180" font-family="monospace" font-size="11" fill="#9a978a">Melbourne</text>
+    </svg>
+    <span class="tag" style="top:12px;left:14px">MAP / 空间验证 · 编号对应列表</span>
+    <div class="pin" style="left:22%;top:24%"><div class="n">01</div><div class="stem"></div></div>
+    <div class="pin" style="left:30%;top:34%"><div class="n">02</div><div class="stem"></div></div>
+    <div class="pin hot" style="left:42%;top:46%"><div class="n">03</div><div class="stem"></div></div>
+    <div class="pin" style="left:52%;top:40%"><div class="n">04</div><div class="stem"></div></div>
+    <div class="pin" style="left:66%;top:62%"><div class="n">05</div><div class="stem"></div></div>
+    <div class="legend">● 选中 03 · 距墨大 3.3 km<br>◦ 其余候选 · 点击查看<br>⚑ 墨尔本大学（主校区）</div>
+  </aside>
+</main>
+
+<!-- 4 ── 状态栏：终端式的系统反馈 -->
+<footer class="statusbar">
+  <span class="ok">● 连接正常</span>
+  <span>共 5 套 · 3 项筛选生效</span>
+  <span>数据更新于 2026-09-09 23:20</span>
+  <span class="r">QISUO ARCHIVE v2.0 / POWERED BY 栖所</span>
+</footer>
+
+</body>
+</html>

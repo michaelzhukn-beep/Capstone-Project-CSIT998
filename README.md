@@ -1,5 +1,13 @@
 # AI-Driven Real Estate Assistant — Data & Search (Member B)
 
+> **Working on this repo (human or AI agent)? Start with [`AGENTS.md`](./AGENTS.md)**
+> and [`docs/PROJECT_STATE.md`](./docs/PROJECT_STATE.md). This repo is worked on by
+> more than one AI agent, and those files — not any chat history — are the shared
+> project memory.
+>
+> Note: the sections below describe Member B's original data/search track. The
+> assistant itself now lives in `app/`; see `docs/ARCHITECTURE.md`.
+
 This repo is Member B's track of a 3-person AI capstone project (see the team's shared `contracts.md` for the full interface contract across all tracks — not included in this repo, ask the team for the current copy). Member B owns three things:
 
 1. The property dataset — sourced, cleaned, and enriched with real rental data
@@ -36,9 +44,9 @@ docker exec -i capstone_postgres psql -U capstone -d capstone < schema.sql
 cd ..
 ```
 
-(If you have a local `psql` client installed, `psql postgresql://capstone:capstone@localhost:5432/capstone -f schema.sql` works too — the `docker exec` version above doesn't require anything installed beyond Docker itself.)
+(If you have a local `psql` client installed, `psql postgresql://capstone:capstone@localhost:15432/capstone -f schema.sql` works too — the `docker exec` version above doesn't require anything installed beyond Docker itself.)
 
-This starts Postgres 16 + pgvector in a container (`capstone_postgres`, port 5432, credentials `capstone`/`capstone`/`capstone` — local dev only) and creates the `properties` table with a 768-dim vector column and HNSW cosine index.
+This starts Postgres 16 + pgvector in a container (`capstone_postgres`, host port 15432 -> container 5432, credentials `capstone`/`capstone`/`capstone` — local dev only) and creates the `properties` table with a 768-dim vector column and HNSW cosine index.
 
 ### 2. Getting the data
 
@@ -84,6 +92,37 @@ results = search_properties(
 ```
 
 Returns a list of dicts shaped exactly per the shared contract (`id`, `suburb`, `address`, `property_type`, `price`, `bedrooms`, `bathrooms`, `car_spaces`, `land_size`, `building_area`, `distance_cbd`, `latitude`, `longitude`, `annual_rent`, `description` — never `embedding`). Hard constraints (`max_price`, `min_price`, `bedrooms`, `bathrooms`, `property_type`, `suburb`) are enforced as exact SQL filters — a property violating any of them never appears, even ranked low. `semantic_query` is the only thing ranked by meaning (vector cosine similarity), never matched as literal text.
+
+## Web interface
+
+Double-click `start-web.bat` in the project root, or:
+
+```bash
+pip install -r requirements.txt
+python serve.py            # http://localhost:8000, opens the browser when ready
+python serve.py --lan      # also reachable from a phone on the same Wi-Fi
+```
+
+To let someone outside your network try it, double-click `share-web.bat`, or:
+
+```bash
+python share.py            # starts the server if needed, opens a Cloudflare
+                           # Quick Tunnel, prints and copies the public URL
+python share.py --attach   # server already running; just open the tunnel
+```
+
+The tunnel has **no password**, dies when you close the window, and gets a new
+random address every time. It needs `cloudflared` on PATH
+(`winget install --id Cloudflare.cloudflared`); the script never downloads it
+for you, it only tells you the command.
+
+`start-web.bat` must stay pure ASCII with CRLF line endings -- cmd.exe reads
+.bat files in the OEM code page and will try to execute mis-decoded UTF-8
+comment fragments as commands. The reason is documented inside the file.
+
+No npm, no build step -- the frontend is three static files under `app/web/`
+served by FastAPI. The command-line version (`python run.py`) still works and
+shares the same graph. See `NOTES_FOR_SUPERVISOR.md` for the design rationale.
 
 ## Known limitations
 

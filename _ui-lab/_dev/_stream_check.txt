@@ -1,0 +1,17 @@
+status=200  content-type=text/event-stream; charset=utf-8  transfer-encoding=chunked
+  + 3206ms  node
+  + 3206ms  params
+  + 3206ms  node
+  + 3206ms  node
+  + 3206ms  node
+  + 3206ms  node
+  + 3206ms  ranking
+  + 3209ms  more
+  + 3209ms  node
+  + 4952ms  results
+  + 5824ms  node
+  + 5830ms  answer
+  + 5831ms  done
+总事件 187，非 token 事件 13，总耗时 5831ms
+
+✅ SSE 真流式:事件在不同时间点分别到达

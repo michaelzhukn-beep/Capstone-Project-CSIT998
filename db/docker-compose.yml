@@ -9,7 +9,9 @@ services:
       POSTGRES_PASSWORD: capstone
       POSTGRES_DB: capstone
     ports:
-      - "5432:5432"
+      # 宿主机固定 15432,避开本机默认 Postgres 占用的 5432;容器内仍是 5432。
+      # 改这里必须同步改 .env 的 DB_DSN、.env.example 与 README。
+      - "15432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 

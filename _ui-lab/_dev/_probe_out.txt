@@ -1,0 +1,406 @@
+=== META KEYS ===
+attributes, attribute_parts, attribute_notes, evidence_labels, kinds, sort_labels, planning_needs, property_types, valuation_error_by_type, unsupported, crime_year, assumptions
+
+=== meta.sort_labels ===
+{
+ "gross_yield": "毛租金回报率从高到低",
+ "cap_rate": "资本化率从高到低",
+ "roi": "投资回报率从高到低",
+ "predicted_gap": "估值高于售价的幅度从大到小",
+ "predicted_gap_neg": "估值低于售价的幅度从大到小",
+ "price_asc": "价格从低到高",
+ "price_desc": "价格从高到低",
+ "near_place_distance": "离指定地点从近到远",
+ "quiet": "「安静」评分从高到低",
+ "lively": "「热闹」评分从高到低",
+ "convenient": "「生活便利」评分从高到低",
+ "shopping": "「购物方便」评分从高到低",
+ "green": "「近公园绿地」评分从高到低",
+ "beach_access": "「近海」评分从高到低",
+ "transport": "「通勤方便」评分从高到低",
+ "school_access": "「教育配套」评分从高到低",
+ "medical": "「医疗方便」评分从高到低",
+ "fitness": "「运动健身」评分从高到低",
+ "spacious": "「宽敞」评分从高到低",
+ "family": "「适合家庭」评分从高到低",
+ "away_industry": "「远离工业与污染源」评分从高到低",
+ "low_crime": "「治安较好」评分从高到低",
+ "away_cemetery": "「远离墓地」评分从高到低"
+}
+
+=== meta.attributes (前 20) ===
+quiet=安静, lively=热闹, convenient=生活便利, shopping=购物方便, green=近公园绿地, beach_access=近海, transport=通勤方便, school_access=教育配套, medical=医疗方便, fitness=运动健身, spacious=宽敞, family=适合家庭, away_industry=远离工业与污染源, low_crime=治安较好, away_cemetery=远离墓地
+
+=== meta.evidence_labels (前 20) ===
+train_station_m=["距最近火车站","米"]
+tram_stop_m=["距最近电车站","米"]
+bus_stop_m=["距最近公交站","米"]
+airport_m=["距最近机场","米"]
+kindergarten_m=["距最近幼儿园/托儿所","米"]
+primary_school_m=["距最近小学","米"]
+secondary_school_m=["距最近中学","米"]
+university_m=["距最近大学/学院","米"]
+library_m=["距最近图书馆","米"]
+hospital_m=["距最近医院","米"]
+pharmacy_m=["距最近药房","米"]
+bank_m=["距最近银行","米"]
+supermarket_m=["距最近超市","米"]
+mall_m=["距最近购物中心","米"]
+police_m=["距最近警察局","米"]
+gym_m=["距最近健身房","米"]
+sports_centre_m=["距最近体育中心","米"]
+park_m=["距最近公园绿地","米"]
+beach_m=["距最近海滩","米"]
+major_road_m=["距最近主干道","米"]
+
+=== meta 其余键的类型 ===
+  attributes : object
+  attribute_parts : object
+  attribute_notes : object
+  evidence_labels : object
+  kinds : object
+  sort_labels : object
+  planning_needs : object
+  property_types : object
+  valuation_error_by_type : object
+  unsupported : object
+  crime_year : string
+  assumptions : object
+
+=== SSE 事件序列 (event 名 + data 顶层键) ===
+  + 1149ms  node      keys=[node]
+  + 1150ms  params    keys=[intent,params]
+
+=== params 全文 ===
+{
+ "semantic_query": "three bedroom home near train station",
+ "max_price": 1000000,
+ "min_price": null,
+ "bedrooms": 3,
+ "bathrooms": null,
+ "property_type": null,
+ "suburb": null,
+ "sort_by": null,
+ "min_gross_yield": null,
+ "amenity_needs": [
+  {
+   "kind": "train_station",
+   "max_distance_m": 1000
+  }
+ ],
+ "near_place": null,
+ "abstract_needs": null,
+ "unsupported_asks": null,
+ "school_zone": null,
+ "planning_needs": null
+}
+  intent=new_search
+  + 1214ms  node      keys=[node]
+  + 1271ms  node      keys=[node]
+  + 1302ms  node      keys=[node]
+  + 1307ms  node      keys=[node]
+  + 1307ms  ranking   keys=[ranking,count]
+       ranking=已筛出距火车站 1000 米内的;按语义相关度排序  count=5
+  + 1308ms  more      keys=[metrics]
+  + 1311ms  node      keys=[node]
+  + 1313ms  results   keys=[metrics]
+
+=== 第 1 套 metric 全文 ===
+{
+ "id": 18579,
+ "suburb": "South Morang",
+ "address": "11 Paddys Pl",
+ "property_type": "house",
+ "price": 555000,
+ "bedrooms": 3,
+ "bathrooms": 2,
+ "car_spaces": 2,
+ "distance_cbd": 20.5,
+ "annual_rent": 20748,
+ "latitude": -37.61821,
+ "longitude": 145.10506,
+ "land_size": null,
+ "building_area": 125,
+ "gross_yield": 0.037383783783783785,
+ "operating_expenses": 5809,
+ "noi": 14939,
+ "cap_rate": 0.026917117117117115,
+ "roi": 0.025520610895672823,
+ "stamp_duty": 28370,
+ "total_cost": 585370,
+ "assumptions": {
+  "opex_rate": 0.28,
+  "other_acquisition_costs": 2000
+ },
+ "predicted_price": 563565,
+ "valuation_is_stub": false,
+ "valuation_error_pct": 0.09392182692307692,
+ "valuation_range": [
+  510634,
+  616496
+ ],
+ "predicted_gap": 0.015432432432432433,
+ "amenities": {
+  "train_station": {
+   "name": "Hawkstowe",
+   "distance_m": 836
+  },
+  "primary_school": {
+   "name": "Mernda Park Primary School",
+   "distance_m": 826
+  },
+  "hospital": {
+   "name": "(未命名)",
+   "distance_m": 1538
+  },
+  "bank": {
+   "name": "Bendigo Bank",
+   "distance_m": 3950
+  }
+ },
+ "near_place": null,
+ "in_requested_zone": true,
+ "school_zones": {
+  "primary": "Mernda Park Primary School",
+  "secondary": "Mernda Central P-12 College"
+ },
+ "planning": {
+  "zone": "GRZ1",
+  "zone_desc": "GENERAL RESIDENTIAL ZONE - SCHEDULE 1",
+  "zone_label": "一般住宅区",
+  "density": "medium",
+  "lga": "WHITTLESEA",
+  "overlays": [
+   {
+    "code": "DCPO9",
+    "family": "DCPO",
+    "label": "开发须缴基建费",
+    "effect": "cost"
+   },
+   {
+    "code": "DPO5",
+    "family": "DPO",
+    "label": "须先报开发总体规划",
+    "effect": "build"
+   },
+   {
+    "code": "IPO1",
+    "family": "IPO",
+    "label": "须符合已并入的片区规划",
+    "effect": "build"
+   },
+   {
+    "code": "SLO11",
+    "family": "SLO",
+    "label": "重要景观保护",
+    "effect": "build"
+   },
+   {
+    "code": "VPO1",
+    "family": "VPO",
+    "label": "植被保护",
+    "effect": "build"
+   }
+  ],
+  "nearby": {
+   "medium": 1,
+   "open": 1
+  },
+  "nearby_total": 2,
+  "nearby_high": 0,
+  "nearby_low": 0,
+  "nearby_open": 1,
+  "nearby_industrial": 0,
+  "radius_m": 350,
+  "summary": "分区 GRZ1(一般住宅区) · 叠加层:DCPO9 开发须缴基建费、DPO5 须先报开发总体规划、IPO1 须符合已并入的片区规划、SLO11 重要景观保护 等 5 项 · 周边 ±350 米方形范围内 2 块地,1 块是公园绿地(不会变成建筑)",
+  "caveat": "分区是法律上的**允许**范围,不是对未来的预测;分区数据是当前的,成交价是 2016–2018 年的,两者不能因果相连"
+ },
+ "crime": {
+  "lga": "Whittlesea",
+  "rate_per_100k": 4992.9
+ }
+}
+  + 1850ms  token     keys=[t] len=1
+  + 1908ms  token     keys=[t] len=1
+  + 1910ms  token     keys=[t] len=2
+  + 1910ms  token     keys=[t] len=2
+  + 1925ms  token     keys=[t] len=1
+  + 1925ms  token     keys=[t] len=1
+  + 1939ms  token     keys=[t] len=1
+  + 1939ms  token     keys=[t] len=1
+  + 1953ms  token     keys=[t] len=3
+  + 1954ms  token     keys=[t] len=1
+  + 1954ms  token     keys=[t] len=1
+  + 1968ms  token     keys=[t] len=2
+  + 1981ms  token     keys=[t] len=1
+  + 2002ms  token     keys=[t] len=2
+  + 2002ms  token     keys=[t] len=2
+  + 2022ms  token     keys=[t] len=2
+  + 2022ms  token     keys=[t] len=3
+  + 2022ms  token     keys=[t] len=1
+  + 2022ms  token     keys=[t] len=1
+  + 2022ms  token     keys=[t] len=1
+  + 2022ms  token     keys=[t] len=1
+  + 2022ms  token     keys=[t] len=1
+  + 2022ms  token     keys=[t] len=1
+  + 2022ms  token     keys=[t] len=1
+  + 2050ms  token     keys=[t] len=1
+  + 2051ms  token     keys=[t] len=2
+  + 2051ms  token     keys=[t] len=1
+  + 2051ms  token     keys=[t] len=2
+  + 2077ms  token     keys=[t] len=2
+  + 2077ms  token     keys=[t] len=1
+  + 2077ms  token     keys=[t] len=1
+  + 2077ms  token     keys=[t] len=3
+  + 2077ms  token     keys=[t] len=1
+  + 2105ms  token     keys=[t] len=3
+  + 2106ms  token     keys=[t] len=1
+  + 2106ms  token     keys=[t] len=1
+  + 2106ms  token     keys=[t] len=1
+  + 2106ms  token     keys=[t] len=1
+  + 2106ms  token     keys=[t] len=2
+  + 2130ms  token     keys=[t] len=1
+  + 2155ms  token     keys=[t] len=2
+  + 2155ms  token     keys=[t] len=1
+  + 2155ms  token     keys=[t] len=1
+  + 2155ms  token     keys=[t] len=1
+  + 2155ms  token     keys=[t] len=1
+  + 2155ms  token     keys=[t] len=1
+  + 2155ms  token     keys=[t] len=1
+  + 2174ms  token     keys=[t] len=1
+  + 2174ms  token     keys=[t] len=1
+  + 2174ms  token     keys=[t] len=2
+  + 2174ms  token     keys=[t] len=1
+  + 2202ms  token     keys=[t] len=1
+  + 2203ms  token     keys=[t] len=1
+  + 2203ms  token     keys=[t] len=2
+  + 2203ms  token     keys=[t] len=1
+  + 2224ms  token     keys=[t] len=1
+  + 2224ms  token     keys=[t] len=1
+  + 2224ms  token     keys=[t] len=1
+  + 2224ms  token     keys=[t] len=1
+  + 2225ms  token     keys=[t] len=1
+  + 2225ms  token     keys=[t] len=1
+  + 2241ms  token     keys=[t] len=1
+  + 2241ms  token     keys=[t] len=1
+  + 2241ms  token     keys=[t] len=2
+  + 2266ms  token     keys=[t] len=3
+  + 2266ms  token     keys=[t] len=1
+  + 2267ms  token     keys=[t] len=3
+  + 2267ms  token     keys=[t] len=1
+  + 2322ms  token     keys=[t] len=1
+  + 2322ms  token     keys=[t] len=2
+  + 2323ms  token     keys=[t] len=1
+  + 2323ms  token     keys=[t] len=2
+  + 2350ms  token     keys=[t] len=1
+  + 2351ms  token     keys=[t] len=1
+  + 2351ms  token     keys=[t] len=1
+  + 2351ms  token     keys=[t] len=2
+  + 2399ms  token     keys=[t] len=1
+  + 2399ms  token     keys=[t] len=2
+  + 2399ms  token     keys=[t] len=1
+  + 2399ms  token     keys=[t] len=1
+  + 2399ms  token     keys=[t] len=2
+  + 2399ms  token     keys=[t] len=1
+  + 2399ms  token     keys=[t] len=1
+  + 2399ms  token     keys=[t] len=1
+  + 2399ms  token     keys=[t] len=1
+  + 2399ms  token     keys=[t] len=2
+  + 2399ms  token     keys=[t] len=2
+  + 2399ms  token     keys=[t] len=2
+  + 2399ms  token     keys=[t] len=1
+  + 2399ms  token     keys=[t] len=2
+  + 2399ms  token     keys=[t] len=2
+  + 2400ms  token     keys=[t] len=2
+  + 2400ms  token     keys=[t] len=2
+  + 2418ms  token     keys=[t] len=1
+  + 2418ms  token     keys=[t] len=1
+  + 2418ms  token     keys=[t] len=1
+  + 2418ms  token     keys=[t] len=1
+  + 2432ms  token     keys=[t] len=1
+  + 2432ms  token     keys=[t] len=1
+  + 2432ms  token     keys=[t] len=1
+  + 2432ms  token     keys=[t] len=1
+  + 2432ms  token     keys=[t] len=1
+  + 2433ms  token     keys=[t] len=1
+  + 2442ms  token     keys=[t] len=1
+  + 2442ms  token     keys=[t] len=1
+  + 2442ms  token     keys=[t] len=1
+  + 2442ms  token     keys=[t] len=1
+  + 2442ms  token     keys=[t] len=1
+  + 2442ms  token     keys=[t] len=1
+  + 2454ms  token     keys=[t] len=1
+  + 2454ms  token     keys=[t] len=1
+  + 2467ms  token     keys=[t] len=2
+  + 2468ms  token     keys=[t] len=2
+  + 2479ms  token     keys=[t] len=1
+  + 2480ms  token     keys=[t] len=2
+  + 2500ms  token     keys=[t] len=2
+  + 2508ms  token     keys=[t] len=1
+  + 2508ms  token     keys=[t] len=1
+  + 2543ms  token     keys=[t] len=3
+  + 2543ms  token     keys=[t] len=1
+  + 2543ms  token     keys=[t] len=3
+  + 2543ms  token     keys=[t] len=1
+  + 2543ms  token     keys=[t] len=1
+  + 2543ms  token     keys=[t] len=1
+  + 2543ms  token     keys=[t] len=2
+  + 2543ms  token     keys=[t] len=1
+  + 2555ms  token     keys=[t] len=1
+  + 2555ms  token     keys=[t] len=1
+  + 2555ms  token     keys=[t] len=1
+  + 2555ms  token     keys=[t] len=1
+  + 2569ms  token     keys=[t] len=2
+  + 2582ms  token     keys=[t] len=1
+  + 2582ms  token     keys=[t] len=2
+  + 2582ms  token     keys=[t] len=1
+  + 2582ms  token     keys=[t] len=2
+  + 2600ms  token     keys=[t] len=2
+  + 2600ms  token     keys=[t] len=1
+  + 2600ms  token     keys=[t] len=3
+  + 2611ms  token     keys=[t] len=2
+  + 2624ms  token     keys=[t] len=1
+  + 2624ms  token     keys=[t] len=1
+  + 2625ms  token     keys=[t] len=2
+  + 2638ms  token     keys=[t] len=1
+  + 2639ms  token     keys=[t] len=1
+  + 2639ms  token     keys=[t] len=1
+  + 2639ms  token     keys=[t] len=1
+  + 2639ms  token     keys=[t] len=1
+  + 2639ms  token     keys=[t] len=1
+  + 2650ms  token     keys=[t] len=1
+  + 2650ms  token     keys=[t] len=1
+  + 2651ms  token     keys=[t] len=2
+  + 2664ms  token     keys=[t] len=2
+  + 2664ms  token     keys=[t] len=1
+  + 2688ms  token     keys=[t] len=1
+  + 2688ms  token     keys=[t] len=1
+  + 2688ms  token     keys=[t] len=1
+  + 2688ms  token     keys=[t] len=1
+  + 2688ms  token     keys=[t] len=1
+  + 2688ms  token     keys=[t] len=1
+  + 2713ms  token     keys=[t] len=1
+  + 2713ms  token     keys=[t] len=2
+  + 2743ms  token     keys=[t] len=2
+  + 2743ms  token     keys=[t] len=1
+  + 2743ms  token     keys=[t] len=1
+  + 2743ms  token     keys=[t] len=2
+  + 2784ms  token     keys=[t] len=2
+  + 2784ms  token     keys=[t] len=1
+  + 2784ms  token     keys=[t] len=2
+  + 2784ms  token     keys=[t] len=1
+  + 2792ms  token     keys=[t] len=2
+  + 2792ms  token     keys=[t] len=2
+  + 2792ms  token     keys=[t] len=1
+  + 2792ms  token     keys=[t] len=1
+  + 2802ms  token     keys=[t] len=2
+  + 2817ms  token     keys=[t] len=1
+  + 2830ms  token     keys=[t] len=2
+  + 2830ms  token     keys=[t] len=1
+  + 2830ms  token     keys=[t] len=2
+  + 2844ms  token     keys=[t] len=2
+  + 2863ms  node      keys=[node]
+  + 2863ms  answer    keys=[answer]
+  + 2873ms  done      keys=[intent,params,ranking,count,assumptions]
+
+总事件数 192，总耗时 2873ms

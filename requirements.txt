@@ -1,11 +1,11 @@
 # Data pipeline (pipeline/*.py)
-pandas==3.0.1
+pandas==3.0.2
 matplotlib==3.10.6
 openpyxl==3.1.5
 rapidfuzz==3.14.5
 
 # Embedding model + database (search.py, pipeline/load_properties.py)
-sentence-transformers==6.0.0
+sentence-transformers==6.0.1
 psycopg2-binary==2.9.12
 pgvector==0.5.0
 
@@ -18,3 +18,37 @@ einops==0.8.2
 # from its .py source (see "Member B's tasks.md"). Not required to run
 # the pipeline itself.
 # jupytext==1.19.5
+
+# --- 第一版编排层(V1_TASKS.md)---
+# 配置:.env -> 环境变量(app/core/config.py)
+python-dotenv==1.2.3
+# 编排:四节点状态图(app/orchestration/graph.py)
+langgraph==1.2.11
+# LLM 客户端。用 OpenAI SDK 是因为 DeepSeek / 通义 / vLLM 等都兼容它的接口,
+# 换供应商只需要改 .env 里的 LLM_BASE_URL 和 LLM_MODEL,代码不动。
+openai==3.6.0
+
+# --- V2:估值模型(app/analytics/train_valuation.py + valuation.py)---
+# XGBoost 用了两个关键能力:enable_categorical(直接吃 suburb 这种类别特征,
+# 不用 one-hot 出 338 列)和 monotone_constraints(把"房间越多越贵"这类常识
+# 写进模型结构,防止它在训练数据没覆盖的组合上给出反常识结论)。
+xgboost==3.4.1
+# 只用来做线性回归 baseline 和评估指标。没有 baseline 的模型指标不可解释。
+scikit-learn==1.8.0
+
+# --- V6:学区边界(app/amenities/zones.py)---
+# 点在多边形内判断 + STRtree 空间索引。725 个学区 × 几千套候选,
+# 没有空间索引就是几百万次多边形判断。
+shapely==2.1.2
+
+# 试过但**最终没有用上**的三个,故意不列进来,免得别人以为是必需的:
+#   pyshp    —— 官方 ZIP 里同时提供 GeoJSON,不必解析 shapefile
+#   pyproj   —— 那份 GeoJSON 用的是 CRS84(就是 WGS84 经纬度),不需要投影转换
+#   openpyxl —— 在本机 Python 3.14 上读同一份 xlsx 时好时坏(内部报
+#               'code' object has no attribute 'get' / 'Cell' object is not callable)。
+#               一次性脚本不能依赖一个随时会挂的库,改成 pipeline/xlsx_reader.py,
+#               六十行标准库搞定,从此没有这个依赖。
+
+# V8 网页版:FastAPI 服务 + 单页前端(app/web,无构建)
+fastapi>=0.115
+uvicorn[standard]>=0.30

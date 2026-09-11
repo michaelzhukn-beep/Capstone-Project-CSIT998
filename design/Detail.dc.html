@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600&amp;display=swap">
+  <style>
+    body { margin: 0; font-family: -apple-system, "SF Pro Text", "PingFang SC", "Noto Sans SC", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+    * { box-sizing: border-box; }
+    a { color: #226B8E; } a:hover { color: #1A5573; }
+  </style>
+</helmet>
+<div style="width: 390px; height: 1180px; background: #CFCEC9; color: #1D1D1F; display: flex; flex-direction: column; overflow: hidden;">
+
+  <div style="height: 88px; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 10px; font-size: 13px; color: #6E6E73;">5 套 · 按安静度</div>
+
+  <div style="flex: 1 1 auto; background: #FFFFFF; border-radius: 22px 22px 0 0; box-shadow: 0 -8px 32px rgba(0,0,0,0.12); padding: 10px 20px 28px 20px; display: flex; flex-direction: column; gap: 20px; overflow: hidden;">
+
+    <div style="width: 36px; height: 5px; border-radius: 999px; background: #E6E5E1; align-self: center;"></div>
+
+    <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 12px;">
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="font-size: 13px; color: #6E6E73;">Westmeadows · 8 Hesse Ct</div>
+        <div style="font-size: 30px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1;">$547,500</div>
+        <div style="font-size: 13px; color: #6E6E73;">3 房 1 卫 · 独栋 · 2017 年成交</div>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 2px;">
+        <div style="font-size: 30px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1;">93</div>
+        <div style="font-size: 11px; color: #6E6E73;">安静度</div>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 14px; align-items: center; font-size: 11px; color: #6E6E73; padding: 10px 12px; background: #F5F4F0; border-radius: 10px;">
+      <div style="display: flex; align-items: center; gap: 5px;"><svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.5" fill="#1D1D1F"></circle></svg><span>实测 / 法定</span></div>
+      <div style="display: flex; align-items: center; gap: 5px;"><span style="color: #8A8A8E; font-weight: 600;">~</span><span>基于假设</span></div>
+      <div style="display: flex; align-items: center; gap: 5px;"><svg width="8" height="8" viewBox="0 0 8 8"><path d="M4 0l4 4-4 4-4-4z" fill="#226B8E"></path></svg><span>模型预测</span></div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div style="font-size: 13px; font-weight: 600; color: #6E6E73; letter-spacing: 0.02em;">投资账</div>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
+        <div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 12px; color: #6E6E73;">毛租金回报率</div><div style="font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums;">3.8%</div><div style="font-size: 11px; color: #6E6E73;">年租金 $20,816 ÷ 售价</div></div>
+        <div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 12px; color: #6E6E73;">印花税(维州法定)</div><div style="font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums;">$27,920</div><div style="font-size: 11px; color: #6E6E73;">分档累进,实际税率 5.1%</div></div>
+        <div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 12px; color: #6E6E73;">净营运收入 NOI</div><div style="font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; color: #8A8A8E; text-decoration: underline dotted #B8B8BC; text-underline-offset: 4px;">~$14,988</div><div style="font-size: 11px; color: #6E6E73;">按运营支出 28% 假设</div></div>
+        <div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 12px; color: #6E6E73;">Cap Rate · ROI</div><div style="font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; color: #8A8A8E; text-decoration: underline dotted #B8B8BC; text-underline-offset: 4px;">~2.7% · ~2.6%</div><div style="font-size: 11px; color: #6E6E73;">ROI 分母含印花税与杂费</div></div>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: #E8F1F6; border-radius: 12px;">
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <div style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #226B8E;"><svg width="8" height="8" viewBox="0 0 8 8"><path d="M4 0l4 4-4 4-4-4z" fill="#226B8E"></path></svg><span>模型估值</span></div>
+          <div style="font-size: 19px; font-weight: 600; color: #226B8E; font-variant-numeric: tabular-nums;">$550,208</div>
+        </div>
+        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 11px; color: #226B8E;">
+          <div>区间 $497k ~ $603k</div>
+          <div>独栋典型误差 ±9.6% · 与售价基本相符</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div style="font-size: 13px; font-weight: 600; color: #6E6E73; letter-spacing: 0.02em;">周边</div>
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;">
+        <div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 11px; color: #6E6E73;">大学</div><div style="font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums;">1.5 km</div></div>
+        <div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 11px; color: #6E6E73;">火车站</div><div style="font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums;">2.0 km</div></div>
+        <div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 11px; color: #6E6E73;">小学</div><div style="font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums;">824 m</div></div>
+        <div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 11px; color: #6E6E73;">医院</div><div style="font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums;">1.8 km</div></div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; background: #F5F4F0; border-radius: 12px;">
+        <div style="display: flex; justify-content: space-between; font-size: 13px;"><span style="font-weight: 600;">安静度 93</span><span style="color: #6E6E73;">全库相对位置</span></div>
+        <div style="font-size: 12px; color: #6E6E73; line-height: 1.6;">距主干道 1,143 m · 距铁路 1,891 m · 300 m 内夜间营业 0 家 · 距工业用地 2,837 m</div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div style="font-size: 13px; font-weight: 600; color: #6E6E73; letter-spacing: 0.02em;">事实与法规</div>
+      <div style="display: flex; flex-direction: column; gap: 0;">
+        <div style="display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid #E6E5E1; font-size: 14px;"><span style="color: #6E6E73;">小学学区</span><span style="text-align: right;">Westmeadows Primary School</span></div>
+        <div style="display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid #E6E5E1; font-size: 14px;"><span style="color: #6E6E73;">中学学区</span><span style="text-align: right;">Hume Central Secondary College</span></div>
+        <div style="display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid #E6E5E1; font-size: 14px;"><span style="color: #6E6E73;">规划分区</span><span style="text-align: right;">GRZ1 一般住宅区</span></div>
+        <div style="display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid #E6E5E1; font-size: 14px;"><span style="color: #6E6E73;">叠加层</span><span style="color: #8A4B00; font-weight: 500; text-align: right;">MAEO2 墨尔本机场噪声</span></div>
+        <div style="display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid #E6E5E1; font-size: 14px;"><span style="color: #6E6E73;">周边 ±350 m</span><span style="text-align: right;">9 块地 · 3 块公园绿地</span></div>
+        <div style="display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; font-size: 14px;"><span style="color: #6E6E73;">罪案率 · Hume</span><span style="text-align: right;">6,017 / 10 万人 <span style="color: #6E6E73; font-size: 12px;">LGA 级</span></span></div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; background: #F5F4F0; border-radius: 14px;">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div style="font-size: 13px; font-weight: 600; color: #6E6E73; letter-spacing: 0.02em;">假设 · 改了带 ~ 的数会重算</div>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center; font-size: 14px;"><span>运营支出 = 年租金 × <span style="font-weight: 600;">28%</span></span><span style="color: #226B8E; font-weight: 500;">改</span></div>
+      <div style="display: flex; justify-content: space-between; align-items: center; font-size: 14px;"><span>购置杂费 <span style="font-weight: 600;">$2,000</span></span><span style="color: #226B8E; font-weight: 500;">改</span></div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

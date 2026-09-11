@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F5F4F0">
+<title>筑明AI · 墨尔本找房</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<!-- data-stage 决定布局形态:welcome = 单列居中(没有结果时不摆空栏),
+     working = 分栏。三个空白栏是"大块空白"的来源,不是样式问题。 -->
+<div id="app" data-stage="welcome">
+  <header class="top">
+    <div class="brand">筑明AI</div>
+    <div class="top-actions">
+      <button id="btn-lang" class="link lang" type="button" title="Switch to English">EN</button>
+      <button id="btn-assume" class="link" type="button">假设</button>
+      <button id="btn-new" class="link" type="button">新对话</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="col col-chat">
+      <!-- 例子不再是标题下面那一排整齐的按钮,而是散在首屏空白处慢慢飘。
+           一排等宽胶囊读起来是"表单选项",而这几条是**例子** ——
+           松散地飘着才像"你可以这么问",不像"你只能选这四个"。
+           词条和坐标都是 app.js 每次进页面现算的,见 renderDrift()。 -->
+      <div id="driftfield" class="driftfield" role="group" aria-label="示例问句"></div>
+      <div id="welcome" class="welcome">
+        <h1 class="welcome-h">探索你的理想居所</h1>
+        <p class="welcome-p">输入预算、区域或偏好。<br>所有评估数据均基于实测、假设校验与模型测算。</p>
+      </div>
+      <div id="chat" class="chat"></div>
+      <form id="composer" class="composer" autocomplete="off">
+        <input id="input" type="text" placeholder="输入预算、区域或偏好,例如「100万内 · 近车站 · 3房」" enterkeyhint="send">
+        <button type="submit" class="send" aria-label="发送">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M5 12l7-7 7 7"></path></svg>
+        </button>
+      </form>
+    </section>
+
+    <section class="col col-results">
+      <div id="results" class="results"></div>
+    </section>
+
+    <!-- 地图常驻,不再是「列表/地图」二选一。
+         署名单独放在右下角、盖在边缘渐隐之上 —— OSM 瓦片是 ODbL,署名是法律要求,
+         不能被消散效果吃掉。Leaflet 自带的 attributionControl 已关。 -->
+    <!-- 署名放在 .map-wrap **外面**:地图本体带了遮罩做边缘溶解,
+         署名在里面就会被一起溶掉。ODbL 要求署名可见,这是法律要求。 -->
+    <section class="col col-map">
+      <div class="map-wrap"><div id="map" class="map"></div></div>
+      <a class="map-attr" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a>
+    </section>
+
+    <!-- 详情不再占一栏:窄屏是底部抽屉,宽屏从右侧滑出盖住地图。
+         盖地图而不是盖列表 —— 看细节时列表要留着,好一套接一套地翻。 -->
+    <aside id="detail" class="detail" aria-label="房源细节"></aside>
+  </main>
+
+  <div id="backdrop" class="backdrop"></div>
+  <div id="popover" class="popover"></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<!-- 文案表必须在 app.js 之前:app.js 一进 init 就要读 window.I18N -->
+<script src="/static/i18n.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

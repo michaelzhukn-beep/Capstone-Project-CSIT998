@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F2F1EC">
+<title>找房助手 · 图纸桌(实验室)</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="paper.css">
+</head>
+<body>
+
+<div id="lab" data-stage="welcome">
+
+  <!-- ══ 顶栏:一条发丝线,不做浮起 ══
+       主站的顶栏是 rgba(245,244,240,.92)+blur+底边线。这里取消 blur ——
+       图纸桌的语言里,工具栏是**压在纸面上的一条纸边**,不是浮在内容上的玻璃。 -->
+  <header class="bar">
+    <div class="bar-brand">
+      <span class="mk">找房</span>
+      <span class="reg">MELBOURNE · XGB + OSM + PLANNING</span>
+    </div>
+    <div class="bar-actions">
+      <button id="btn-assume" class="lnk" type="button">假设</button>
+      <button id="btn-new" class="lnk" type="button">新对话</button>
+    </div>
+  </header>
+
+  <main class="grid">
+
+    <!-- ══ 第 1 栏:对话 + 条件卡 ══ -->
+    <section class="col c-chat">
+      <div class="col-head"><span class="idx">01</span><h2>要求</h2><span class="hint">说一句话就够</span></div>
+      <div class="col-body" id="chat-scroll">
+        <div id="welcome" class="welcome">
+          <h1>想找什么样的房子?</h1>
+          <p>说预算、几房、哪个区,想离什么近 —— 或者只说"安静一点"。<br>
+             <em>每个数字都会标明它是实测、按假设算的,还是模型估的。</em></p>
+          <div class="examples" id="examples"></div>
+        </div>
+        <div id="chat" class="chat"></div>
+      </div>
+      <form id="composer" class="composer" autocomplete="off">
+        <input id="input" type="text" placeholder="比如:100 万以内、安静、离火车站近的三房" enterkeyhint="send">
+        <button id="send" class="send" type="submit" aria-label="发送">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M5 12l7-7 7 7"></path></svg>
+        </button>
+      </form>
+    </section>
+
+    <!-- ══ 第 2 栏:结果 ══ -->
+    <section class="col c-results">
+      <div class="col-head">
+        <span class="idx">02</span><h2>候选</h2>
+        <span class="hint" id="res-hint">—</span>
+      </div>
+      <div class="col-body" id="results-scroll">
+        <div id="res-head" class="res-head"></div>
+        <div id="results" class="results"></div>
+      </div>
+    </section>
+
+    <!-- ══ 第 3 栏:地图 + 详情 ══
+         地图和详情共用一栏:详情覆盖在地图之上,而不是挤掉列表。
+         看细节的时候候选列表要留着,好一套接一套地翻。 -->
+    <section class="col c-map">
+      <div class="col-head">
+        <span class="idx">03</span><h2>位置与细节</h2>
+        <span class="hint" id="map-hint">—</span>
+      </div>
+      <div class="col-body map-body">
+        <div class="map-wrap">
+          <div id="map" class="map"></div>
+          <div class="map-empty" id="map-empty">出结果后,这里会标出它们的位置</div>
+        </div>
+        <a class="map-attr" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a>
+        <aside id="detail" class="detail" aria-label="房源细节"></aside>
+      </div>
+    </section>
+
+  </main>
+
+  <div id="popover" class="popover"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="lab.js"></script>
+</body>
+</html>

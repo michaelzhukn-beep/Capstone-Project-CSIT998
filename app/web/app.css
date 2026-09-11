@@ -1,0 +1,756 @@
+:root {
+  --bg: #F5F4F0; --card: #FFFFFF; --ink: #1D1D1F; --sub: #6E6E73; --hair: #E6E5E1;
+  --chip: #EFEEEA; --accent: #226B8E; --accent-bg: #E8F1F6; --assume: #8A8A8E;
+  --warn: #8A4B00; --warn-bg: #FBF1E3; --radius: 16px;
+  /* 测距那根线的颜色。情报板上钉的红线是这个意思,但压暗、去饱和过,
+     才压得住地图那张花底子,也才和纸面暖灰(#F5F4F0)是一路的。 */
+  --thread: #A34A3A;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.05);
+
+  /* 动效曲线。浏览器内置的 ease-out 太软,没有"是有人特意做过"的手感。
+     这三条来自 Emil Kowalski 的 design-eng skill,别在别处手搓 cubic-bezier。
+     ease-in 一律不用于 UI:它开头慢,而开头正是用户盯着看的那一刻。 */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);      /* 进入 / 退出 */
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);  /* 在屏幕上移动 / 形变 */
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);   /* iOS 抽屉手感 */
+  --press: 160ms;   /* 按压反馈 */
+  --pop: 200ms;     /* 浮层 */
+  --sheet: 460ms;   /* 抽屉 */
+}
+* { box-sizing: border-box; }
+/* 浏览器自带的 [hidden]{display:none} 是 UA 样式,**任何**作者写的 display 都能盖过它。
+   .btn 是 display:flex,于是 `el.hidden = true` 对按钮完全没作用 —— 属性设上了、
+   元素照样显示,而且 DOM 里看起来一切正常。这条补上去,hidden 才是真的 hidden。 */
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-size: 15px; line-height: 1.5;
+  font-family: -apple-system, "SF Pro Text", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+input, select { font: inherit; color: inherit; }
+.hidden { display: none !important; }
+
+/* 按压反馈:凡是能按的都要有。scale 会连同里面的文字和图标一起缩,
+   这正是它读起来像"真的按下去了"的原因 —— 幅度必须小(0.96–0.98),
+   再大就变成弹跳玩具了。:active 在触屏上就是真实按压,不需要 hover 门控。 */
+button { transition: transform var(--press) var(--ease-out); }
+button:active { transform: scale(0.97); }
+button:disabled { transform: none; }
+/* 卡片面积大,同样的 0.97 会显得夸张,按下去要更克制 */
+.card:active { transform: scale(0.988); }
+
+/* ---------- 顶栏 ---------- */
+.top { position: sticky; top: 0; z-index: 20; display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 20px; background: rgba(245,244,240,.92); backdrop-filter: blur(12px); border-bottom: 1px solid var(--hair); }
+.brand { font-weight: 600; font-size: 17px; letter-spacing: -.01em; }
+.top-actions { display: flex; gap: 18px; }
+.link { color: var(--sub); }
+.link:hover { color: var(--ink); }
+/* 语言开关。按钮上写的是**要切过去**的那个语言 —— 写当前语言的话,
+   用户得先想一秒"这是状态还是动作"。加个框,让它读起来像开关而不是链接。 */
+.link.lang { border: 1px solid var(--hair); border-radius: 999px; padding: 3px 10px;
+  font-size: 12px; line-height: 1.4; font-variant-numeric: tabular-nums; }
+.link.lang:hover { border-color: var(--ink); }
+.link.lang:active { scale: 0.97; }
+
+/* ---------- 布局(手机:单列,顺序 对话 → 地图 → 结果) ---------- */
+.layout { display: flex; flex-direction: column; padding-bottom: 104px; }
+.col-chat { padding: 14px 20px 0; order: 1; }
+.col-map { padding: 14px 20px 0; order: 2; }
+.col-results { padding: 14px 20px 0; order: 3; }
+[data-stage="welcome"] .col-map { display: none; }
+
+/* ---------- 欢迎态 ----------
+   还没搜过的时候只留一列,居中。原来三栏一开场就摆两个空栏 + 一个空白大盒子,
+   页面 80% 是空的 —— 那不是"留白",是没内容。 */
+[data-stage="welcome"] #chat,
+[data-stage="welcome"] .col-results,
+[data-stage="welcome"] .detail { display: none; }
+[data-stage="working"] .welcome { display: none; }
+
+[data-stage="welcome"] .col-chat {
+  min-height: calc(100vh - 57px - 104px); display: flex; flex-direction: column; justify-content: center;
+}
+/* 宽度交给外层的列(680px)统一控制,这里不要再套一个 560 ——
+   两个不同的宽度会让标题和下面的输入框右边缘对不齐。只有正文单独收窄,
+   那是为了行长好读,不是为了排版。 */
+.welcome { display: flex; flex-direction: column; gap: 14px; }
+.welcome-h { margin: 0; font-size: 30px; font-weight: 600; letter-spacing: -.025em; line-height: 1.2; }
+.welcome-p { margin: 0; color: var(--sub); font-size: 15px; line-height: 1.6; max-width: 46em; }
+/* ---------- 首屏浮动词条 ----------
+   例子散在首屏的空白处慢慢飘,不再是标题下面一排整齐的胶囊。
+   一排等宽按钮读起来是"表单选项",而这几条是**例子** ——
+   大小不一、松散地飘着,才像"你可以这么问"。 */
+[data-stage="welcome"] .col-chat { position: relative; }
+/* 上下各留 6%,不铺满整屏:铺满的话词条会跑到视口最边上,和首屏的重心脱节。 */
+.driftfield { position: absolute; inset: 6% 0; pointer-events: none; z-index: 0; overflow: hidden; }
+[data-stage="working"] .driftfield { display: none; }
+/* 文字和输入框压在词条之上 */
+.welcome { position: relative; z-index: 1; }
+
+/* 位移交给外层的 slot,按压反馈留给里层的按钮 —— 两个 transform 放在
+   同一个元素上会互相顶掉,而 infinite 的那个永远赢,:active 就再也没反应了。
+   两条动画分工也很清楚:一条只管透明度(入场),一条只管位移(漂移)。 */
+/* **底色就是最终状态**:词条默认就是可见的,入场只是先用 .pre 藏住、
+   到点了摘掉。
+
+   为什么连淡入的 transition 都不留 —— 这是本项目第五次栽在同一件事上。
+   实测这套预览环境里**动画和过渡的时钟都不走**:五条词条的
+   `animation currentTime` 一直是 0,连 opacity 的 CSSTransition 也冻在起点,
+   于是"从 0 淡到 0.8"这句话的结果是**永远停在 0** —— 整屏词条全隐形,
+   而且不报错。用 visibility 切换就没有这个问题:它不可过渡,只会立刻生效。
+   动画可以没有,**看不看得见不能赌**。 */
+.drift-slot { position: absolute; pointer-events: auto; opacity: var(--op, 1);
+  will-change: transform;
+  animation: drift var(--dur, 24s) ease-in-out var(--delay, 0s) infinite; }
+.drift-slot.pre { visibility: hidden; }
+@keyframes drift {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50%      { transform: translate3d(var(--dx, 0), var(--dy, 0), 0); }
+}
+.drift-chip { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap;
+  padding: .52em 1em; border-radius: 999px; font-size: var(--fs, 14px); line-height: 1.5;
+  color: var(--sub); background: rgba(255, 255, 255, .62);
+  border: 1px solid var(--hair); backdrop-filter: blur(8px);
+  font-variant-numeric: tabular-nums; letter-spacing: .01em;
+  transition: color var(--press) ease, border-color var(--press) ease,
+              background-color var(--press) ease, transform var(--press) var(--ease-out); }
+.drift-chip:hover { color: var(--ink); border-color: #C9C8C3; background: var(--card); }
+.drift-chip:active { transform: scale(.97); }
+.dc-sep { color: #C9C8C3; }
+
+/* 首屏、每人只看一次 —— 按 skill 的分级,这一档才配得上"惊喜预算"。
+   30–80ms 的错峰;超过就开始显得慢。
+   用 backwards 而不是 forwards:forwards 会让动画的终值一直压着元素,
+   把子按钮的 :active scale 顶掉(动画优先级高于普通声明)。backwards
+   只在延迟期间生效,播完就交还给普通样式,按压反馈才活得下来。 */
+.welcome > * { animation: rise 420ms var(--ease-out) backwards; }
+.welcome > *:nth-child(2) { animation-delay: 60ms; }
+.welcome > *:nth-child(3) { animation-delay: 120ms; }
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+
+/* ---------- 对话 ---------- */
+.chat { display: flex; flex-direction: column; gap: 14px; }
+.msg-user { align-self: flex-end; max-width: 82%; background: var(--ink); color: #fff;
+  border-radius: 18px 18px 4px 18px; padding: 10px 14px; line-height: 1.45; }
+.msg-assistant { white-space: pre-wrap; text-wrap: pretty; }
+.msg-assistant.intro { color: var(--sub); }
+/* 流式光标。说明现在是对话流里的一条消息,光标跟着走。 */
+.msg-assistant.streaming::after { content: "▍"; color: var(--sub); animation: pulse .8s infinite alternate; }
+/* 手机上收起来。宽屏的对话是独立一栏、自己滚,说明再长也不挡别人;
+   手机只有一条滚动流,近千字的说明会把地图和卡片顶到一千多像素以下 ——
+   实测要滚过 1200px 才看得见第一张卡。点一下展开。 */
+.msg-assistant.clamped { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.msg-more { align-self: flex-start; font-size: 13px; font-weight: 500; color: var(--accent); padding: 2px 2px 0; margin-top: -8px; }
+.msg-status { font-size: 13px; color: var(--sub); display: flex; align-items: center; gap: 8px; }
+.msg-status .dot { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); animation: pulse 1s infinite alternate; }
+@keyframes pulse { from { opacity: .25 } to { opacity: 1 } }
+.msg-error { color: var(--warn); font-size: 14px; }
+
+/* ---------- 条件卡 ---------- */
+.conditions { background: var(--card); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; gap: 14px; box-shadow: var(--shadow); }
+.cond-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 600; color: var(--sub); letter-spacing: .02em; }
+.cond-head span { font-weight: 400; }
+.cond-group { display: flex; flex-direction: column; gap: 8px; }
+.cond-label { font-size: 12px; color: var(--sub); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+/* flex:0 0 auto + nowrap 缺一不可:chip 里的文字有空格("房型 不限"),
+   不禁止换行的话 flex 会把它压到 min-content 宽度,再被 999px 圆角变成一个
+   文字溢出在外的圆圈。踩过。 */
+.chip { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px 0 14px; border-radius: 999px;
+  background: var(--chip); font-size: 14px; font-weight: 500; text-align: left; flex: 0 0 auto; white-space: nowrap; }
+.chip > span:first-child { overflow: hidden; text-overflow: ellipsis; max-width: 15em; }
+.chip.hard { background: var(--ink); color: #fff; }
+/* 不能叫 .empty —— 那个类名已经被"空状态"占了(padding: 28px 0; text-align: center),
+   撞在一起会把 chip 的内边距冲掉,压成一个文字溢出的圆圈。踩过。 */
+.chip.unset { background: transparent; border: 1px dashed #C9C8C3; color: var(--sub); font-weight: 400; }
+.chip.sort { background: var(--card); border: 1px solid var(--hair); padding-right: 8px; }
+.chip .x { width: 22px; height: 22px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; opacity: .55; margin-left: 2px; }
+.chip .x:hover { opacity: 1; background: rgba(0,0,0,.08); }
+.chip.hard .x:hover { background: rgba(255,255,255,.18); }
+.chip select { appearance: none; -webkit-appearance: none; background: transparent; border: 0; font-weight: 500; padding: 0 22px 0 4px; height: 44px; outline: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236E6E73' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat: no-repeat; background-position: right 4px center; }
+.cond-unsupported { font-size: 12px; color: var(--sub); }
+.cond-hint { font-size: 12px; color: var(--sub); }
+.cond-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--sub); }
+
+/* ---------- 输入栏 ---------- */
+.composer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; gap: 10px; align-items: center;
+  padding: 12px 20px calc(16px + env(safe-area-inset-bottom));
+  background: linear-gradient(to top, var(--bg) 72%, rgba(245,244,240,0)); }
+.composer input { flex: 1 1 auto; height: 48px; border: 1px solid var(--hair); border-radius: 999px; padding: 0 18px; background: var(--card); outline: none;
+  transition: border-color var(--press) ease, box-shadow var(--press) ease; }
+.composer input:focus { border-color: #B8B8BC; box-shadow: 0 0 0 3px rgba(29,29,31,.05); }
+.composer .send { width: 44px; height: 44px; border-radius: 999px; background: var(--ink); display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.composer .send:disabled { opacity: .35; }
+
+/* ---------- 结果 ---------- */
+/* --slide:结果区右侧**常驻**留出的空当,给选中的卡片滑进去。
+   必须是留白而不是让它溢出:卡片右边缘正是指标区(分数、毛回报),
+   溢出去会被滚动容器裁掉,等于把最重要的数字切掉。 */
+.results { display: flex; flex-direction: column; gap: 12px; --slide: 28px; padding-right: var(--slide); }
+/* 选中的那张滑出去。用 transform 不用 margin —— transform 不触发重排,
+   卡片里的标签不会因为宽度变化重新折行。 */
+.card.selected { transform: translateX(var(--slide)); }
+.card.selected:active { transform: translateX(var(--slide)) scale(0.988); }
+.res-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 6px; }
+.res-title { font-weight: 600; min-width: 0; }
+.res-notes { font-size: 12px; color: var(--sub); display: flex; flex-direction: column; gap: 2px; }
+
+/* 说明的结构:一句话结论 + 最多 3 条要点。
+   之前是一整块散文,五段近千字 —— 用户原话是"信息地狱"。
+   卡片上已经有的数字不再复述,这里只留判断。 */
+.msg-lead { font-weight: 600; line-height: 1.5; }
+.msg-bullets { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
+/* 圆点用绝对定位,**不能**把这一行做成 flex 容器 ——
+   行文里嵌着可点的「第 N 套」按钮,flex 会把它变成独立的 flex item,
+   句子会被拆成几块、号码单独掉到下一行。踩过。 */
+.msg-bullet { position: relative; padding-left: 14px; line-height: 1.5; font-size: 14px; }
+.msg-bullet::before { content: ''; position: absolute; left: 0; top: .62em;
+  width: 5px; height: 5px; border-radius: 999px; background: #C9C8C3; }
+/* 模型没按格式、多写出来的段落。不丢内容,但压暗一档。 */
+.msg-extra { margin-top: 10px; font-size: 14px; color: var(--sub); line-height: 1.55; }
+
+/* 说明里的「第 N 套」:可点,跳到对应卡片。做成下划虚线而不是按钮长相 ——
+   它长在句子中间,不能打断阅读节奏。 */
+.ref { display: inline; font: inherit; color: var(--accent); font-weight: 500;
+  border-bottom: 1px dashed rgba(34,107,142,.45); padding: 0; vertical-align: baseline; }
+.ref:hover { border-bottom-color: var(--accent); background: var(--accent-bg); }
+.ref:active { transform: none; }        /* 行内文字缩放会把整行挤动,这里不要按压位移 */
+/* 换批之后指不到的引用,降成普通文字。留一个点了没反应的按钮比没有按钮更糟。 */
+.ref.stale { color: inherit; font-weight: inherit; border-bottom: 0; cursor: default; pointer-events: none; }
+
+/* 被引用跳转命中的卡片闪一下。只闪边框和底色,不做位移 ——
+   卡片是用户正在读的内容,不该为了提示而移动。 */
+@keyframes cardFlash {
+  0%   { border-color: var(--accent); background: var(--accent-bg); }
+  100% { border-color: transparent; background: var(--card); }
+}
+.card.flash { animation: cardFlash 1200ms var(--ease-out); }
+
+/* 骨架屏:等待期间占住结果区的位置,让说明和卡片"长出来"而不是"弹出来"。
+   CSS animation 跑在主线程之外 —— 而这几秒主线程正忙着接 SSE。 */
+.skeleton { background: var(--card); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.skeleton i { display: block; height: 10px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--chip) 25%, #E4E3DE 37%, var(--chip) 63%);
+  background-size: 400% 100%; animation: shimmer 1.4s linear infinite; }
+.skeleton i:nth-child(2) { width: 92%; }
+.skeleton i:nth-child(3) { width: 64%; }
+@keyframes shimmer { from { background-position: 100% 0 } to { background-position: 0 0 } }
+/* 房源卡一次出现 5 张,错峰 45ms 依次浮起。同样用 backwards —— 见 .welcome 那条注释。
+   延迟由 JS 按序号写(--d),不用 nth-child:结果区里还混着标题、说明、骨架屏,
+   nth-child 数的是所有兄弟节点,序号会错。 */
+.card { background: var(--card); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+  box-shadow: var(--shadow); cursor: pointer; border: 1.5px solid transparent;
+  transition: border-color var(--press) ease, transform var(--press) var(--ease-out);
+  animation: rise 340ms var(--ease-out) backwards; animation-delay: var(--d, 0ms); }
+.card.selected { border-color: var(--ink); }
+/* hover 位移必须门控:触屏点一下会误触发 hover,元素会卡在 hover 态。
+   这里只换边框颜色不做位移 —— 卡片是每天要看几十次的东西,按 skill 的分级
+   只配"几乎察觉不到"的变化。 */
+@media (hover: hover) and (pointer: fine) {
+  .card:hover { border-color: #D6D5D0; }
+}
+.card-top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.card-id { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.card-addr { font-size: 13px; color: var(--sub); display: flex; align-items: center; gap: 7px; }
+/* 卡片编号。和地图标记、说明里的「第 N 套」是同一个号 —— 三处对得上,
+   用户才不用猜"第 3 套"是哪张。 */
+.card-no { flex: 0 0 auto; width: 20px; height: 20px; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--ink); color: #fff; font-size: 11px; font-weight: 600;
+  font-variant-numeric: tabular-nums; }
+.card-price { font-size: 22px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.card-meta { font-size: 13px; color: var(--sub); }
+/* 指标区。每个指标一列,**统一"标签在上、数值在下"** ——
+   之前主指标数值在上、次指标数值在后,两种阅读顺序混在一列 62px 宽的地方,
+   还被挤到换行(「安静」和「77」上下分家),根本分不清哪个数配哪个名。
+   排序用的那个放最右、字最大:一列卡片扫下来,它始终在同一条竖线上。 */
+.metrics { display: flex; align-items: flex-start; gap: 20px; flex: 0 0 auto; }
+.metric { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.metric .ml { font-size: 11px; color: var(--sub); white-space: nowrap; }
+.metric .mv { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; white-space: nowrap; }
+.metric.primary .mv { font-size: 26px; letter-spacing: -.02em; }
+.metric .mv.assume { color: var(--assume); }
+.metric .mv.model { color: var(--accent); }
+
+/* 「换一批」 */
+.more-batch { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 6px 0 4px; }
+.more-note { font-size: 12px; color: var(--sub); text-align: center; }
+.card-sub { font-size: 12px; color: var(--sub); }
+.badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.badge { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--hair); font-size: 12px; white-space: nowrap; }
+/* ask = 用户点名要的。给它实底色,让"这是你问的"这件事一眼看得出来,
+   和下面那行灰调的风险披露分开。 */
+.badge.ask { background: var(--chip); border-color: transparent; font-weight: 500; }
+.badge.warn { background: var(--warn-bg); color: var(--warn); border-color: transparent; font-weight: 500; }
+.badge.accent { background: var(--accent-bg); color: var(--accent); border-color: transparent; font-weight: 500; }
+/* 风险行:独立一行、字更小、带"提醒"引导词。
+   降级但不删除 —— 买家没问土壤污染,不等于不该告诉他。 */
+.risks { margin-top: -2px; }
+.risks .badge { height: 24px; font-size: 11px; background: none; border: 1px solid #EADFCB; color: var(--warn); font-weight: 400; }
+.risk-lead { font-size: 11px; color: var(--sub); letter-spacing: .04em; }
+/* ---------- 地图 ----------
+   淡漫画风:瓦片褪成近乎中性 + 略高对比(路网读成墨线),暖调由下面那层
+   站点底色薄纱补回来 —— **不要用 sepia**,它会把绿地、水面、路面压成同一个黄褐色。
+
+   边缘溶解直接做在 .map-wrap 的 mask 上,不再用覆盖层:
+   之前用 radial-gradient(122% 122% ...) 当渐隐,椭圆半径是容器宽的 1.22 倍,
+   左边缘只落在渐变的 41% 处,而第一个色标在 86% —— **边缘压根没进渐变区**,
+   所以怎么调都看不出效果。改用每条边各一道 linear-gradient:
+   跟容器长宽比无关,想让哪条边化多宽就是多宽。
+   三层 mask 取交集 = 任意一条边附近都透明(各自在中间都是不透明的)。 */
+.col-map { position: relative; isolation: isolate; }
+.map-wrap { position: relative; overflow: hidden; background: var(--bg);
+  -webkit-mask-image:
+    linear-gradient(to right, transparent 0, #000 19%),
+    linear-gradient(to bottom, transparent 0, #000 8%),
+    linear-gradient(to top, transparent 0, #000 8%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to right, transparent 0, #000 19%),
+    linear-gradient(to bottom, transparent 0, #000 8%),
+    linear-gradient(to top, transparent 0, #000 8%);
+  mask-composite: intersect;
+}
+.map { height: 260px; }
+.leaflet-tile-pane { filter: saturate(.26) contrast(1.06) brightness(1.04); }
+
+/* 颗粒。**这一层画的是页面底色,不是灰点** —— 用 multiply 盖灰噪点等于给地图蒙灰,
+   看不出"消散"。反过来让底色一粒一粒把地图啃掉,才是沙子化开的样子。
+   只做左边那道缝:那是地图和卡片直接相接的地方,也是唯一会显得生硬的边。
+   噪声 ∩ 左侧色带 —— 噪声决定"哪一粒被吃掉",色带决定"吃到多深"。
+   feColorMatrix 把湍流的红通道搬进 alpha 再减 0.18,得到疏密不匀的颗粒。 */
+.map-wrap::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 2;
+  background: var(--bg);
+  -webkit-mask-image:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='s'><feTurbulence type='fractalNoise' baseFrequency='0.62' numOctaves='4' stitchTiles='stitch'/><feColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 -0.18'/></filter><rect width='180' height='180' filter='url(%23s)'/></svg>"),
+    linear-gradient(to right, #000 3%, transparent 30%);
+  mask-image:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='s'><feTurbulence type='fractalNoise' baseFrequency='0.62' numOctaves='4' stitchTiles='stitch'/><feColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 -0.18'/></filter><rect width='180' height='180' filter='url(%23s)'/></svg>"),
+    linear-gradient(to right, #000 3%, transparent 30%);
+  -webkit-mask-size: 180px 180px, 100% 100%;
+  mask-size: 180px 180px, 100% 100%;
+  -webkit-mask-repeat: repeat, no-repeat;
+  mask-repeat: repeat, no-repeat;
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+}
+/* 站点底色薄纱,把瓦片整体往配色上再拉一点 */
+.map-wrap::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 1;
+  background: rgba(245, 244, 240, .26);
+}
+/* 署名在 .map-wrap 之外(见 index.html),不会被遮罩溶掉。
+   z-index 压在地图之上 —— ODbL 要求署名可见,这是法律要求,不是排版偏好。 */
+.map-attr { position: absolute; right: 12px; bottom: 10px; z-index: 3;
+  font-size: 10px; color: var(--sub); text-decoration: none; background: rgba(245,244,240,.82);
+  backdrop-filter: blur(4px); padding: 3px 7px; border-radius: 999px; white-space: nowrap; }
+.map-attr:hover { color: var(--ink); }
+/* 选中房源时滴在地图上的黄色颜料。
+   multiply + 0.55 不透明度:底下的路网、街区名必须还读得出来 ——
+   它是"这一套在这儿"的标记,不是遮罩。
+   化开的动画从 scale(.3) 起:这是**故意**违反"不要从 scale(0) 长出来"那条 ——
+   那条针对的是"元素凭空出现",而这里画的就是一滴颜料落下去往外洇,
+   起点小正是它要表达的东西。 */
+.blot-wrap { pointer-events: none; }
+/* 基态就是**可见**的。动画只挂在 .spreading 上,由 JS 加、定时器摘 ——
+   如果把可见状态交给动画的终帧,一旦 rAF 被节流(标签页不出帧),动画就停在
+   起始帧 opacity:0,颜料整个看不见。实测踩到:playState 是 running,
+   但 currentTime 永远是 0。**动画可以不播,结果不能赌** —— 这是第三次了。 */
+.blot { display: block; mix-blend-mode: multiply; opacity: .55; transform-origin: 50% 50%; }
+.blot.spreading { animation: blotIn 520ms var(--ease-out); }
+@keyframes blotIn { from { opacity: 0; transform: scale(.3) rotate(-10deg); } }
+
+.map-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--sub); font-size: 13px; text-align: center; padding: 20px; }
+/* 图钉:尖端对准坐标、号码浮在上方 —— 原来是个圆点扣在坐标正中央,
+   把它要标记的东西(门牌号、这栋楼本身)盖住了。
+   未选中:实心,一眼看得见 —— 试过半透明毛玻璃,结果是"没变透明,反而更难发现",
+   在浅色底图上白色半透明会糊成一团灰。
+   选中:**整枚图钉消失**,那一处交给黄色颜料。
+   这样同一时刻只有一个东西压在地图上,而且是那个软的、透光的。 */
+.pin { display: flex; flex-direction: column; align-items: center; }
+/* 内层专门用来横向岔开重合的图钉。**不能把位移写在 .pin 上** ——
+   那是 Leaflet 用 transform 定位的元素,覆盖它图钉会飞走。 */
+.pin-in { display: flex; flex-direction: column; align-items: center; transform: translateX(var(--nx, 0)); }
+.pin-badge { width: 22px; height: 22px; border-radius: 999px; background: var(--ink); color: #fff;
+  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .32); }
+.pin-tip { width: 0; height: 0; margin-top: -1px;
+  border-left: 4px solid transparent; border-right: 4px solid transparent;
+  border-top: 7px solid var(--ink); }
+.pin.on { display: none; }
+
+.leaflet-container { font: inherit; }
+.leaflet-control-attribution { font-size: 10px; }
+.empty { color: var(--sub); font-size: 14px; padding: 28px 0; text-align: center; }
+
+/* ---------- 详情 ---------- */
+/* 105% 而不是 100%:向上的阴影有 32px,只挪自身高度的话阴影还挂在屏幕底边上。 */
+.detail { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; max-height: 88vh; overflow: auto;
+  background: var(--card); border-radius: 22px 22px 0 0; box-shadow: 0 -8px 32px rgba(0,0,0,.14);
+  padding: 10px 20px calc(32px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 20px;
+  transform: translateY(105%); transition: transform var(--sheet) var(--ease-drawer); }
+.detail.open { transform: none; }
+
+/* 遮罩和浮层原来用 .hidden(display:none)开关 —— display 不可过渡,
+   所以它俩过去是"啪"地出现的。改用 opacity + visibility:
+   visibility 的延迟只加在关闭方向上,否则元素会在淡出还没播完时就先消失。 */
+.backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.28); z-index: 30;
+  opacity: 0; visibility: hidden;
+  transition: opacity var(--pop) var(--ease-out), visibility 0s linear var(--pop); }
+.backdrop.is-open { opacity: 1; visibility: visible; transition: opacity var(--pop) var(--ease-out); }
+.grabber { width: 36px; height: 5px; border-radius: 999px; background: var(--hair); align-self: center; flex: 0 0 auto; }
+/* 关闭按钮只在宽屏的标题栏里出现(窄屏靠下拉抽屉/点遮罩关) */
+.d-close { display: none; flex: 0 0 auto;
+  width: 30px; height: 30px; border-radius: 999px; background: var(--chip); color: var(--sub);
+  align-items: center; justify-content: center; }
+.d-close:hover { color: var(--ink); }
+.d-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; }
+.d-addr { font-size: 13px; color: var(--sub); }
+.d-price { font-size: 30px; font-weight: 600; letter-spacing: -.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.d-meta { font-size: 13px; color: var(--sub); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 11px; color: var(--sub); padding: 10px 12px; background: var(--bg); border-radius: 10px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.sec { display: flex; flex-direction: column; gap: 10px; }
+.sec-title { font-size: 13px; font-weight: 600; color: var(--sub); letter-spacing: .02em; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.kv { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.kv .k { font-size: 12px; color: var(--sub); }
+.kv .v { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.kv .s { font-size: 11px; color: var(--sub); }
+.grid4 .kv .v { font-size: 15px; }
+.v.assume { color: var(--assume); text-decoration: underline dotted #B8B8BC; text-underline-offset: 4px; }
+.v.model { color: var(--accent); }
+.valbox { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 14px; background: var(--accent-bg); border-radius: 12px; color: var(--accent); }
+.valbox .big { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.valbox .r { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 11px; text-align: right; }
+.evbox { padding: 12px 14px; background: var(--bg); border-radius: 12px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--sub); line-height: 1.6; }
+.evbox .t { display: flex; justify-content: space-between; font-size: 13px; }
+/* 拖低分数的那一项。标出来读者才知道"43 米"是近还是远 ——
+   光给数字不给参照,等于没给。 */
+.ev-weak { color: var(--warn); font-weight: 500; }
+
+/* 属性定义那一行压暗一档 —— 它解释的是"这个分怎么算的",
+   不是"这套房怎么样",不该和上面的实测证据一样重。 */
+.ev-note { color: #9A9A9E; font-size: 11px; }
+.evbox .t b { color: var(--ink); }
+.rows { display: flex; flex-direction: column; }
+.row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--hair); font-size: 14px; }
+.row:last-child { border-bottom: 0; }
+.row .k { color: var(--sub); flex: 0 0 auto; }
+.row .v { text-align: right; }
+.row .v.warn { color: var(--warn); font-weight: 500; }
+.row .v small { color: var(--sub); font-size: 12px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; height: 44px; padding: 0 20px; border-radius: 999px; background: var(--accent); color: #fff; font-weight: 600; }
+.btn.ghost { background: var(--chip); color: var(--ink); }
+.btn.small { height: 36px; padding: 0 14px; font-size: 13px; }
+.caveat { font-size: 11px; color: var(--sub); line-height: 1.5; }
+
+/* ---------- 详情窗:说人话的那几块(V9.5) ---------- */
+/* 一段结论性的白话。它比周围的说明文字大、比标题小 —— 读者的眼睛应该先落在这里,
+   而不是先落在一排数字上。行高放到 1.65,中文长句挤在一起就没人读了。 */
+.plain { font-size: 14px; line-height: 1.65; }
+/* 开价 vs 估价:两个数并排,一眼看出差多少。不并排的话,读者要自己在脑子里做减法。 */
+.cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  padding: 12px 14px; background: var(--bg); border-radius: 12px; }
+.cmp .kv .v { font-size: 22px; }
+.cmp .kv .v.model { color: var(--accent); }
+/* 加法账。一行一笔,竖着加下来,最后一条粗线上面是合计 —— 就是小学的算式排版。 */
+.paybox { display: flex; flex-direction: column; }
+.pay { display: flex; justify-content: space-between; align-items: baseline; gap: 14px;
+  padding: 11px 0; border-bottom: 1px solid var(--hair); }
+.pay:last-child { border-bottom: 0; }
+.pay .pk { font-size: 14px; }
+.pay .pn { font-size: 11px; color: var(--sub); line-height: 1.55; margin-top: 3px; }
+.pay .pv { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pay.assume .pv { color: var(--assume); }
+.pay.total { border-top: 1.5px solid var(--ink); border-bottom: 0; margin-top: 2px; padding-top: 12px; }
+.pay.total .pv { font-size: 23px; }
+/* 可以就地改的那一行。数字和调它的旋钮必须挨在一起 —— 假设原本摆在窗口最底下,
+   而用户是在盯着「合计」时才想到要改它。 */
+.pay.editable .pv { display: inline-flex; align-items: baseline; gap: 1px; }
+.pv-pre { color: var(--assume); font-weight: 600; }
+/* 输入框长得像那个数字本身,只是底下多一条虚线 —— 一眼看出可以改,
+   又不会因为多一个方框把这一行从账目里割出去。 */
+/* 可编辑的假设字段。第一版用"数字底下一条虚线",在 17px 的数值列里勉强看得见,
+   在 11px 的灰色注解里几乎不可见 —— 实测有人根本没发现第二个能改。
+   现在两个字段共用这一套外壳:边框 + 铅笔,认出一个就认得出另一个。
+   铅笔和条件卡上"点一下改"的芯片是同一个图标,复用已有的约定。 */
+.assume-field { display: inline-flex; align-items: center; gap: 2px;
+  padding: 1px 5px 1px 6px; border: 1px solid var(--hair); border-radius: 7px;
+  background: var(--card); cursor: text; vertical-align: middle;
+  transition: border-color var(--press) var(--ease-out), background var(--press) var(--ease-out); }
+.assume-field:hover { border-color: var(--assume); background: var(--bg); }
+.assume-field:focus-within { border-color: var(--accent); background: var(--card); }
+.af-pen { display: inline-flex; color: var(--sub); opacity: .5; flex: 0 0 auto;
+  transition: opacity var(--press) var(--ease-out); }
+.assume-field:hover .af-pen { opacity: .9; }
+.assume-field.big .af-pen svg { width: 12px; height: 12px; }
+.assume-field:not(.big) .af-pen svg { width: 10px; height: 10px; }
+.pv-in { border: 0; background: transparent; padding: 0; outline: none;
+  font: inherit; font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums;
+  color: var(--assume); text-align: right; }
+.pv-in:focus { color: var(--accent); }
+/* 注解句子里夹的那个百分比。比注解本身大一号、颜色也回到正文色 ——
+   它是个要人动手的控件,不该和它周围的说明文字长得一样。 */
+.pn-in { border: 0; background: transparent; padding: 0; outline: none;
+  font: inherit; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
+  color: var(--assume); text-align: center; }
+.pn-in:focus { color: var(--accent); }
+/* 数字输入框右边那两个小箭头会把 tabular-nums 的对齐挤歪,而且这里用不上 */
+.pv-in::-webkit-outer-spin-button, .pv-in::-webkit-inner-spin-button,
+.pn-in::-webkit-outer-spin-button, .pn-in::-webkit-inner-spin-button {
+  -webkit-appearance: none; margin: 0; }
+.pv-in, .pn-in { -moz-appearance: textfield; appearance: textfield; }
+/* 「应用到全部」只在真改过之后才出现,所以它不参与常态排版 */
+/* ---------- 距离测算(V9.8) ---------- */
+.measure { padding: 12px 14px; background: var(--bg); border-radius: 12px;
+  display: flex; flex-direction: column; gap: 8px; }
+.measure-head { display: flex; align-items: baseline; gap: 8px; }
+.mh-t { font-size: 13px; font-weight: 600; }
+.mh-k { font-size: 11px; color: var(--sub); }
+.measure-row { display: flex; align-items: center; gap: 8px; }
+/* A / B 两个小圆标,和地图上那两个图钉是同一套记号 —— 输入框旁边的 A
+   对应地图上的 A,不用再解释哪个是起点。 */
+.m-tag { flex: 0 0 auto; width: 20px; height: 20px; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600; color: #fff; letter-spacing: 0; }
+.m-tag.a { background: var(--accent); }
+.m-tag.b { background: var(--ink); }
+.m-lab { flex: 0 0 auto; font-size: 12px; color: var(--sub); width: 2.6em; }
+.m-in { flex: 1 1 auto; min-width: 0; height: 32px; padding: 0 10px;
+  border: 1px solid var(--hair); border-radius: 8px; background: var(--card);
+  font-size: 13px; transition: border-color var(--press) var(--ease-out); }
+.m-in:focus { outline: none; border-color: var(--accent); }
+/* 关掉浏览器给文本框自带的清除叉。它出现的位置和时机各家不一样,
+   而这一格旁边已经有明确的「清除」按钮了,两个清除入口只会让人犹豫。 */
+.m-in::-ms-clear, .m-in::-ms-reveal { display: none; width: 0; height: 0; }
+.m-in::-webkit-search-cancel-button, .m-in::-webkit-search-decoration { -webkit-appearance: none; }
+.m-go { flex: 0 0 auto; }
+.measure-out { display: flex; flex-direction: column; gap: 2px; padding-top: 2px; }
+/* 量出来的那个数是这一块的主角,给它卡片主指标那一号字 */
+.m-dist { font-size: 26px; font-weight: 600; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums; line-height: 1.1; }
+.m-pair { font-size: 11px; color: var(--sub); line-height: 1.5; }
+/* 详情窗盖着地图的大半边,所以给一个"让开、看地图"的出口。
+   测算结果留在地图上不会随窗子消失,关掉就看得见全貌。 */
+.m-look { font-size: 12px; color: var(--accent); }
+.m-look:hover { text-decoration: underline; }
+.measure-err { font-size: 12px; color: var(--warn); line-height: 1.5; }
+
+/* 地图上的两枚图钉。造型沿用房源图钉的水滴形(尖端对准坐标),只换颜色和
+   里面的字母 —— 同一张地图上两种标记该是一家人,不该一个水滴一个圆片。
+   落下时有个短促的下坠,让人看清"刚刚多了个东西"。 */
+.mpin { background: none; border: 0; display: flex; flex-direction: column; align-items: center; }
+.mpin-in { display: flex; flex-direction: column; align-items: center; transform-origin: 50% 100%;
+  animation: mdrop 460ms var(--ease-out) backwards; }
+.mpin-badge { width: 22px; height: 22px; border-radius: 999px; color: #fff;
+  font-size: 11px; font-weight: 700; letter-spacing: .02em;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 1px 5px rgba(0,0,0,.34), inset 0 0 0 1.5px rgba(255,255,255,.28); }
+.mpin-tip { width: 0; height: 0; margin-top: -1px;
+  border-left: 4px solid transparent; border-right: 4px solid transparent; }
+.mpin.a .mpin-badge { background: var(--thread); }
+.mpin.a .mpin-tip { border-top: 7px solid var(--thread); }
+.mpin.b .mpin-badge { background: var(--ink); }
+.mpin.b .mpin-tip { border-top: 7px solid var(--ink); }
+.mpin.b .mpin-in { animation-delay: 90ms; }        /* 一枚接一枚落下,不要齐刷刷 */
+@keyframes mdrop {
+  from { transform: translateY(-16px) scale(.55); opacity: 0; }
+  60%  { transform: translateY(0) scale(1.06); opacity: 1; }
+  to   { transform: none; opacity: 1; }
+}
+
+/* 那根线。两条叠在一起:底下一条宽而淡的当纸面上的洇痕,上面一条细而实的
+   当线本身 —— 单一笔画压在地图这种花底子上会显得很薄。
+   **是直的,没有垂坠。** 这个功能量的就是直线距离,画成弧线等于用画面撒谎。 */
+.mline-halo { stroke: var(--thread); stroke-opacity: .16; fill: none; stroke-linecap: round; }
+.mline { stroke: var(--thread); fill: none; stroke-linecap: round;
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,.18)); }
+
+/* 读数。悬在中点上方,下面拖一根细引线接到线上 —— 有引线它才是"这根线的读数",
+   没有引线就只是一块飘在地图上的牌子。
+   做法上刻意克制:深底 + 一道极细的高光边 + 等宽数字 + 一点字距。
+   这个界面整体是水彩纸的调子,读数太"科幻"会像贴错了地方。 */
+.mlabel { background: none; border: 0; pointer-events: none; }
+.ml-chip { position: absolute; left: 0; top: 0;
+  transform: translate(-50%, calc(-100% - 13px)); white-space: nowrap;
+  padding: 4px 10px; border-radius: 8px;
+  background: rgba(23,23,25,.92); color: #fff;
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow: 0 2px 10px rgba(0,0,0,.3), 0 0 0 3px rgba(163,74,58,.10);
+  animation: mchip 420ms var(--ease-out) 200ms backwards; }
+.ml-num { font-size: 12.5px; font-weight: 600; letter-spacing: .04em;
+  font-variant-numeric: tabular-nums; }
+/* 引线:从读数底边垂到那根线上 */
+.ml-stem { position: absolute; left: 0; top: 0; width: 1px; height: 13px;
+  transform: translate(-50%, -13px); background: var(--thread); opacity: .7;
+  animation: mstem 260ms var(--ease-out) 160ms backwards; }
+@keyframes mchip {
+  from { opacity: 0; transform: translate(-50%, calc(-100% - 5px)) scale(.94); }
+}
+@keyframes mstem { from { opacity: 0; height: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .mpin-in, .ml-chip, .ml-stem { animation: none; }
+}
+
+/* 结果下面那两个动作:看地图 / 清除 */
+.m-acts { display: flex; align-items: center; gap: 14px; margin-top: 4px; }
+.m-wipe { font-size: 12px; color: var(--sub); }
+.m-wipe:hover { color: var(--warn); text-decoration: underline; }
+
+/* 行话对照:收起来的抽屉。认得术语的人点开就有,不认得的人不用先跨过它。 */
+.jargon { font-size: 12px; color: var(--sub); }
+.jargon summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 7px; padding: 7px 0; }
+.jargon summary::-webkit-details-marker { display: none; }
+.jargon summary::before { content: ''; flex: 0 0 auto; width: 0; height: 0;
+  border-left: 5px solid currentColor; border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  transition: transform var(--press) var(--ease-out); }
+.jargon[open] summary::before { transform: rotate(90deg); }
+.jargon summary:hover { color: var(--ink); }
+.jrow { display: flex; justify-content: space-between; gap: 14px; padding: 6px 0;
+  border-top: 1px solid var(--hair); line-height: 1.55; }
+.jt { flex: 0 0 auto; color: var(--ink); }
+.jp { text-align: right; font-variant-numeric: tabular-nums; }
+/* 大数字底下那行"超过全库 99% 的房源" —— 92 这个数本身没有参照物 */
+.metric .ms { font-size: 11px; color: var(--sub); white-space: nowrap; }
+
+/* ---------- 弹出编辑 ----------
+   它居中出现、不挂在某个触发按钮上,按 skill 的说法这属于 modal ——
+   modal 是 transform-origin 那条规则的唯一豁免项,保持 center 是对的。
+   起始 scale 用 .96 不用 0:现实里没有东西是从"无"里冒出来的。 */
+.popover { position: fixed; left: 50%; top: 50%; width: min(340px, calc(100vw - 40px)); z-index: 60;
+  background: var(--card); border-radius: 18px; padding: 18px; box-shadow: 0 16px 48px rgba(0,0,0,.18); display: flex; flex-direction: column; gap: 12px;
+  transform-origin: center; transform: translate(-50%, -50%) scale(.96); opacity: 0; visibility: hidden;
+  transition: opacity var(--pop) var(--ease-out), transform var(--pop) var(--ease-out), visibility 0s linear var(--pop); }
+.popover.is-open { opacity: 1; visibility: visible; transform: translate(-50%, -50%) scale(1);
+  transition: opacity var(--pop) var(--ease-out), transform var(--pop) var(--ease-out); }
+.popover h4 { margin: 0; font-size: 15px; }
+.popover label { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 14px; }
+.popover input, .popover select { height: 40px; border: 1px solid var(--hair); border-radius: 10px; padding: 0 10px; width: 150px; background: var(--card); }
+.popover .actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.popover .actions .right { display: flex; gap: 8px; }
+.popover .hint { font-size: 12px; color: var(--sub); }
+
+/* ---------- 平板 / 小笔记本:两栏,详情仍是底部抽屉 ---------- */
+@media (min-width: 900px) {
+  /* 两栏 + 两行:左边对话通栏,右边上地图下结果。
+     地图常驻,不再是「列表/地图」二选一 —— 切换才能看见的地图等于没有。 */
+  .layout { display: grid; gap: 18px 24px; padding: 0 28px; height: calc(100vh - 57px);
+    grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas: "chat map" "chat results"; }
+  .col-chat { grid-area: chat; }
+  /* 向右出血到视口边缘(抵消 .layout 的 28px 内边距)。地图不是一张"配图",
+     它是这一屏的底;有边距就等于给它画了个框,和渐隐互相拆台。 */
+  .col-map { grid-area: map; padding: 20px 0 0; overflow: visible; margin-right: -28px; }
+  .col-results { grid-area: results; }
+  .results { --slide: 40px; }
+  .map { height: 260px; }
+  /* 欢迎态收成一列并居中。选择器带 [data-stage] 权重更高,
+     所以 1280 那条三栏规则不会把它顶回去,不用管媒体查询的先后。 */
+  [data-stage="welcome"] .layout { grid-template-columns: minmax(0, 1fr); max-width: 680px; margin: 0 auto; }
+  [data-stage="welcome"] .col-chat { min-height: 0; padding-bottom: 48px; }
+  .welcome-h { font-size: 34px; }
+  .col { overflow: auto; min-height: 0; }
+  .col-chat { display: flex; flex-direction: column; padding: 20px 0 0; }
+  .chat { flex: 1 1 auto; }
+  .composer { position: sticky; left: auto; right: auto; bottom: 0; width: auto; padding: 14px 0 20px; }
+  .col-results { padding: 20px 0 28px; }
+  /* 只清左右下的内边距,**右边留给 --slide** ——
+     写成 `padding: 0` 的简写会把 padding-right 一起清掉,选中的卡片就没地方滑,
+     只能溢出结果栏、把指标区顶出可视范围,还会冒出一条横向滚动条。踩过。 */
+  .results { padding: 0 var(--slide) 0 0; }
+  .cond-status .btn { display: none; }
+  .detail { max-height: 92vh; }
+}
+
+/* ---------- 桌面:三栏,详情变成常驻的第三栏 ----------
+   断点必须够宽。原来定在 1100px,实测中间栏只剩 101 px、房源卡 86 px ——
+   1100 减掉左栏 380、右栏 500、内边距和间距 104,中间只剩一百出头。
+   三条轨道都给 minmax 下限,再加上 1280 的断点,中间栏就压不扁了。 */
+/* ---------- 桌面:三栏 对话 | 结果 | 地图 ---------- */
+@media (min-width: 1280px) {
+  /* 左栏 380 —— 340 时条件卡里的 chip 会挤成三行。中间给卡片,右边给地图,
+     地图拿最大的一份并且上下左右都贴满。
+     三个最小宽之和必须留得下间距和内边距:在 1280 处可用宽度只有
+     1280 − 56(内边距) − 48(两道间距) = 1176。380+380+520 = 1280 就已经超了,
+     结果整页横向滚动。现在 380+320+420 = 1120,留得住。 */
+  .layout { grid-template-columns: 380px minmax(340px, 1fr) minmax(380px, 1.35fr);
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "chat results map"; }
+  .col-map { display: flex; flex-direction: column; padding: 0; margin-right: -28px; }
+  /* 滑出距离随视口放大,但夹在 48–72 之间:
+     太小看不出滑,太大把卡片挤窄(卡片右边是指标区,窄了指标就换行)。
+     这是唯一的旋钮,想更明显就调大上限。 */
+  .results { --slide: clamp(48px, 4vw, 72px); }
+  .map-wrap { flex: 1 1 auto; min-height: 0; }
+  .map { height: 100%; }
+
+  .backdrop { display: none !important; }
+}
+
+/* ---------- 详情:可拖动的浮窗(≥900px) ----------
+   之前是"从右侧滑出、贴着屏幕边、占满整个高度",等于把地图整块盖住 ——
+   看细节的时候地图就没了,而地图正是判断"这套房在哪"的依据。
+   改成一扇能拖走的窗:挡住哪里由用户自己决定,不由布局替他决定。
+
+   位置用 right/top 定一次(不参与动画),拖动只改 --dx/--dy,
+   开关只动 opacity + scale —— 全程只有 transform 和 opacity 在变。 */
+@media (min-width: 900px) {
+  .detail {
+    position: fixed; top: 76px; right: 28px; left: auto; bottom: auto; z-index: 60;
+    width: min(440px, 42vw); max-height: 76vh; overflow: auto; margin: 0;
+    border-radius: 16px; box-shadow: 0 18px 50px rgba(0, 0, 0, .16), 0 2px 6px rgba(0, 0, 0, .06);
+    border: 1px solid var(--hair);
+    padding: 0 20px calc(20px + env(safe-area-inset-bottom));
+    opacity: 0; visibility: hidden;
+    transform: translate3d(var(--dx, 0px), var(--dy, 0px), 0) scale(.97);
+    transition: opacity var(--pop) var(--ease-out), transform var(--pop) var(--ease-out),
+                visibility 0s linear var(--pop);
+  }
+  .detail.open {
+    opacity: 1; visibility: visible;
+    transform: translate3d(var(--dx, 0px), var(--dy, 0px), 0) scale(1);
+    transition: opacity var(--pop) var(--ease-out), transform var(--pop) var(--ease-out);
+  }
+  /* 拖动时必须掐掉过渡,否则窗子会拖一下慢半拍地追过来 */
+  .detail.dragging { transition: none; }
+  .detail .grabber { display: none; }
+  .detail .d-bar { display: flex; }
+  .detail .d-addr { display: none; }   /* 标题栏里已经有一份 */
+}
+
+/* 标题栏 = 拖动把手。sticky 让它在内容滚动时留在顶上 —— 窗子随时能被拖走。 */
+.d-bar { display: none; position: sticky; top: 0; z-index: 6; align-items: center; gap: 10px;
+  margin: 0 -20px 4px; padding: 12px 16px 12px 18px;
+  background: rgba(255, 255, 255, .92); backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--hair); border-radius: 16px 16px 0 0;
+  cursor: grab; touch-action: none; user-select: none; }
+.d-bar:active { cursor: grabbing; }
+.d-bar-title { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--sub);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-bar .d-close { display: inline-flex; position: static; }
+
+/* ---------- 减弱动效 ----------
+   "减弱"不是"关掉":保留不透明度和颜色的过渡(它们帮助理解发生了什么),
+   去掉位移和缩放。前庭敏感的人对位移有反应,对淡入没有。 */
+@media (prefers-reduced-motion: reduce) {
+  .welcome > *, .card { animation: none; }
+  .drift-slot { animation: none; opacity: var(--op, 1); }
+  /* 闪烁保留(它是颜色变化,不是位移),但缩短,别一直晃 */
+  .card.flash { animation: cardFlash 500ms ease; }
+  /* 颜料直接出现,不做化开的缩放 */
+  .blot { animation: none; }
+  button:active, .card:active { transform: none; }
+  .detail { transition: transform 1ms linear; }
+  .popover, .popover.is-open { transition: opacity var(--pop) ease, visibility 0s linear var(--pop); transform: translate(-50%, -50%); }
+  .popover.is-open { transition: opacity var(--pop) ease; }
+  .skeleton i { animation: none; }
+}
