@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+from app.amenities import context                                   # noqa: E402
 from app.amenities.context import collect_evidence, scores          # noqa: E402
 from app.amenities.registry import (                                # noqa: E402
     BY_TYPE_KEYS, all_evidence_keys, evidence_label, used_evidence_keys,
@@ -64,6 +65,7 @@ def main() -> None:
     collected = {key: [] for key in all_evidence_keys()}
     by_type = {}
     score_samples: dict[str, list] = {}
+    evidences = []
     for n, row in enumerate(sample, 1):
         # 走和线上完全同一条路径(collect_evidence)。基准线和线上用不同算法
         # 算出来的分位数是对不上的,那种 bug 极难发现。
@@ -74,12 +76,7 @@ def main() -> None:
         for key in BY_TYPE_KEYS:
             if key in ev:
                 bucket[key].append(ev[key])
-        # 属性分本身的分布。为什么要存这个:属性分是各分项分位数的**加权平均**,
-        # 它自己不是分位数 —— 一加权,极端值就被拉回中间,分布挤在中段。
-        # 所以「安静 92」到底算多好,光看这个数说不出来。有了这张表,界面才敢写
-        # 「全库前 3%」这种话;没有它就只能写「0~100」,而 0~100 等于没说。
-        for attr, value in scores(ev, row.get("property_type"), row.get("bedrooms")).items():
-            score_samples.setdefault(attr, []).append(value)
+        evidences.append((ev, row))
         if n % 500 == 0:
             print(f"  {n:,}/{len(sample):,}")
 
@@ -105,6 +102,24 @@ def main() -> None:
         table = {k: quantiles_of(v) for k, v in buckets.items() if len(v) >= MIN_PER_TYPE}
         if table:
             quantiles_by_type[ptype] = table
+
+    # 属性分本身的分布。为什么要存这个:属性分是各分项分位数的**加权平均**,
+    # 它自己不是分位数 —— 一加权,极端值就被拉回中间,分布挤在中段。
+    # 所以「安静 92」到底算多好,光看这个数说不出来。有了这张表,界面才敢写
+    # 「全库前 3%」这种话;没有它就只能写「0~100」,而 0~100 等于没说。
+    #
+    # **必须用本次刚算出的分位表来打分**,不能用磁盘上的旧基准。以前是边收集证据边打分,
+    # scores() 读到的是上一次的 context_baseline.json:公园从中心点改按边界量距后,
+    # 新距离整体变小、拿旧表一比全都"很近","近公园"分的中位被推到 71(应当约 50)。
+    # 加新证据时更糟 —— 旧表里没有它,那一项在分数分布里整个缺席。
+    context._baseline = {
+        "quantiles": context._as_arrays(quantiles),
+        "quantiles_by_type": {t: context._as_arrays(d) for t, d in quantiles_by_type.items()},
+        "score_quantiles": {},
+    }
+    for ev, row in evidences:
+        for attr, value in scores(ev, row.get("property_type"), row.get("bedrooms")).items():
+            score_samples.setdefault(attr, []).append(value)
 
     # 分数 -> 全库百分位。101 个分位点,和证据表同一个精度。
     score_quantiles = {a: quantiles_of(v) for a, v in score_samples.items() if len(v) >= 500}

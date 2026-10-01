@@ -33,10 +33,11 @@ The rest of this file is operational detail for running the project from Claude 
 
 ## Running it
 
-Postgres + pgvector must be up first. The current local Docker container exposes port
-**15432**, but the checked-in Compose file maps **5432:5432**. Before creating or
-recreating it with the command below, reconcile the mapping with `DB_DSN`; see
-`docs/PROJECT_STATE.md` Known Issues. Do not assume this command reproduces port 15432:
+Postgres + pgvector must be up first. Both the local container and the checked-in
+Compose file now use **15432:5432**. Container ownership is still unresolved: the
+running container was started manually, while Compose owns an exited older one.
+**Do not run the command below until that conflict is resolved**; follow
+`docs/PROJECT_STATE.md` Known Issues and `docs/TODO.md` Now first:
 
 ```bash
 docker compose -f db/docker-compose.yml up -d
@@ -46,8 +47,16 @@ Then:
 
 ```bash
 python serve.py                 # http://localhost:8000
-python serve.py --port=8300     # ports 8001-8100 are reserved by Windows on this machine
+python serve.py --port=8600     # 8600 is what .claude/launch.json uses (8520 fell into an excluded range on 2026-09-30)
 python share.py                 # server + Cloudflare tunnel, prints a public URL
+```
+
+If a port refuses to bind for no apparent reason, it is probably inside a Windows
+excluded range. Those ranges are assigned dynamically (Hyper-V/WSL) and **change across
+reboots**, so check, don't memorise:
+
+```bash
+netsh interface ipv4 show excludedportrange protocol=tcp
 ```
 
 `.py` changes need a server restart. `.js` / `.css` / `.html` changes only need a page
@@ -75,6 +84,12 @@ limitations are real and have cost hours; both are documented in `docs/DECISIONS
   make visibility depend on one.
 - **The map cannot zoom in the pane** (Leaflet's zoom animation is rAF-driven). Zoom
   behaviour has to be verified by the user in a real browser.
+- **WebGL in the pane is not reliable.** On 2026-09-24 it had none (`webgl`/`webgl2` both null,
+  so the homepage showroom fell back to SVG); on 2026-09-30 `webgl2` worked and the showroom
+  rendered. Check `document.createElement('canvas').getContext('webgl2')` before trusting what
+  the pane shows. If it is null, verify the showroom with headless GPU Chrome over CDP
+  (`--headless=new --use-angle=d3d11 --ignore-gpu-blocklist`, then `Page.captureScreenshot`)
+  or ask the owner to look.
 
 Synthetic clicks and typing are also unreliable in the pane. `form_input` plus
 `requestSubmit()` works; `computer` typing often silently does nothing.

@@ -85,16 +85,92 @@ def stamp_duty_vic(price: int | None) -> int | None:
     税制是**分档累进**的,不是一个固定百分比。这一点很要紧:
       $240,000 的房子 -> $9,470,实际税率 3.9%
       $430,000 的房子 -> $20,870,实际税率 4.9%
-      $960,000 的房子 -> $52,800,实际税率 5.5%
+      $960,000 的房子 -> $52,670,实际税率 5.5%(超过 $960,000 才整体按 5.5% 计)
     之前用固定 5.5% 会**高估便宜房子的购置成本、从而低估它们的 ROI**,
     而系统主推的高回报房恰恰都是便宜房 —— 偏差正好打在最关键的地方。
     """
-    if price is None or price < 0:
+    # 价格为 0 不是"免税",是价格不可用 —— 和其他公式一样返回 None,不拿 0 冒充
+    if price is None or price <= 0:
         return None
+    # 取整按《Duties Act 2000》(Vic) 第 28(1) 条:取最近的整元,**恰好是若干元加 50 分时
+    # 取较低的整元**(半数向下)。只改取整,税率表仍是上面的历史表。
+    # 不能用 round():Python 是银行家舍入,整数部分为奇数时多算 1 元($130,125 -> $2,877.50,
+    # 法定 $2,877,round 给 $2,878)。也不能靠浮点:本该恰好 .50 的金额可能算成 .4999…/.5000…。
+    # 税率都是千分之整数,所以以「千分之一元」为单位整数精确计算。
+    # 不用模块级 import —— ROI 离线测试会把本函数单独抽出来执行。
     for cap, base, rate, threshold in _VIC_DUTY_BRACKETS:
         if cap is None or price <= cap:
-            return int(round(base + rate * (price - threshold)))
+            if float(price).is_integer():
+                milli = base * 1000 + round(rate * 1000) * (int(price) - threshold)
+                dollars, rest = divmod(milli, 1000)
+            else:       # 非整数价格(库里是整数列,不该出现):浮点兜底,同一取整规则
+                exact = base + rate * (price - threshold)
+                dollars, rest = int(exact), (exact - int(exact)) * 1000
+            return dollars + (1 if rest > 500 else 0)
     return None
+
+
+def _duty_unrounded(price: float) -> float:
+    """印花税,不取整(只供 ROI 预排序用;对外数字一律用 stamp_duty_vic)。price 必须 > 0。"""
+    for cap, base, rate, threshold in _VIC_DUTY_BRACKETS:
+        if cap is None or price <= cap:
+            return base + rate * (price - threshold)
+    raise AssertionError("unreachable: last bracket has no cap")
+
+
+def roi_unrounded(price, annual_rent, opex_rate: float, other_costs: float) -> float | None:
+    """ROI 不取整版:annual_rent × (1 − opex) ÷ (price + 未取整印花税 + 杂费)。与 roi_order_sql 同一个式子。
+    价格 ≤ 0 或缺租金 -> None(和 investment_metrics 一致)。"""
+    if price is None or annual_rent is None or price <= 0:
+        return None
+    total = price + _duty_unrounded(price) + other_costs
+    return annual_rent * (1 - opex_rate) / total if total > 0 else None
+
+
+def roi_order_sql(rent_col: str = "annual_rent", price_col: str = "price",
+                  opex_param: str = "%(opex_rate)s::float8", fees_param: str = "%(other_costs)s::float8") -> str:
+    """ROI(不取整)的 SQL 表达式,供检索层 ORDER BY 取候选池;**税档直接由 _VIC_DUTY_BRACKETS 生成**,不另抄税率表。
+
+    为什么只做「预排序」而不宣称精确:investment_metrics 把运营支出和印花税各取整到元,SQL 这一版不取整,
+    两者对极接近的房源可能反序。所以最终排序仍用 Python 的 ROI,并用 roi_certified_prefix 证明**哪几名**不可能被
+    候选池外的房源超过;证明不了的,调用方必须如实披露。价格 ≤ 0 或缺租金 -> NULL(排最后)。
+    """
+    p = price_col
+    whens, tail = [], None
+    for cap, base, rate, threshold in _VIC_DUTY_BRACKETS:
+        term = f"{base} + {rate} * ({p} - {threshold})"
+        if cap is None:
+            tail = term
+        else:
+            whens.append(f"WHEN {p} <= {cap} THEN {term}")
+    duty = f"CASE WHEN {p} <= 0 THEN NULL {' '.join(whens)} ELSE {tail} END"
+    return f"(({rent_col} * (1 - {opex_param})) * 1.0 / NULLIF({p} + ({duty}) + {fees_param}, 0))"
+
+
+def roi_certified_prefix(rois_desc: list, cutoff: float | None, other_costs: float) -> int:
+    """候选池内、按 ROI 降序排好的结果里,**前几名**可以证明不会被池外房源超过(返回个数)。
+
+    证明:池外任何一套的「不取整 ROI」≤ cutoff(池里最后一套的不取整 ROI,SQL 按它排序截断)。
+    Python 取整后的 ROI 与不取整版相差至多 δ = (0.5 + 1.5·ROI) / (杂费 − 0.5):
+      分子(年租金 − 取整的运营支出)至多差 0.5;分母(房价 + 取整的印花税 + 杂费,再 int())至多差 1.5,
+      且分母不小于杂费 − 0.5(房价 ≥ 1)。所以池外任何一套的取整 ROI < cutoff + δ(cutoff)。
+      池内某名的 Python ROI 严格大于这个上界,它就不可能被池外的超过 —— 与数据库怎么处理并列、
+      浮点、取整的细节无关(1e-9 留给 SQL 浮点与 Python 浮点的差)。
+    cutoff 为 None:池没被截断,或截断处已是 NULL-ROI,所有有 ROI 的房源都在池里 -> 全部成立。
+    杂费 ≤ 0.5 时分母没有下界,证明不了,返回 0。
+    """
+    if cutoff is None:
+        return len(rois_desc)
+    denom = float(other_costs) - 0.5
+    if denom <= 0:
+        return 0
+    threshold = cutoff + (0.5 + 1.5 * cutoff) / denom + 1e-9
+    n = 0
+    for r in rois_desc:
+        if r is None or not r > threshold:
+            break
+        n += 1
+    return n
 
 
 def investment_metrics(price, annual_rent, opex_rate: float, other_costs: float) -> dict:

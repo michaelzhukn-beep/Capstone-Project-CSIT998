@@ -59,9 +59,15 @@ assert stamp_duty_vic(130_000) == 2_870                 # 350 + 2.4% × 105,000
 assert stamp_duty_vic(240_000) == 9_470                 # 2,870 + 6% × 110,000
 assert stamp_duty_vic(960_000) == 52_670
 assert stamp_duty_vic(1_300_000) == 71_500              # 最高档:全额 5.5%
-assert stamp_duty_vic(0) == 0
+assert stamp_duty_vic(0) is None      # 价格为 0 是不可用,不是免税(审计 BUG-11)
 assert stamp_duty_vic(None) is None
 assert stamp_duty_vic(-5) is None
+# 取整:恰好 .50 元取较低整元(Duties Act 2000 s 28(1)),不是银行家舍入,也不受浮点误差左右
+assert stamp_duty_vic(130_125) == 2_877                 # 2,870 + 6% × 125 = 2,877.50 -> 2,877(round() 给 2,878)
+assert stamp_duty_vic(130_175) == 2_880                 # 2,880.50 -> 2,880(偶数部分,两种舍入一致)
+assert stamp_duty_vic(130_126) == 2_878                 # 2,877.56 -> 2,878,过半照常进位
+assert stamp_duty_vic(25_025) == 351                    # 350 + 2.4% × 25 = 350.60 -> 351
+assert stamp_duty_vic(960_010) == 52_801                # 5.5% × 960,010 = 52,800.55 -> 52,801
 
 # 分档必须连续,不能在档位边界跳变(最高一档除外 —— 法定表本身有个小台阶)
 for boundary in (25_000, 130_000):

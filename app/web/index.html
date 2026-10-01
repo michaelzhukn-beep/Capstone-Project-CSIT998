@@ -6,39 +6,96 @@
 <meta name="theme-color" content="#F5F4F0">
 <title>筑明AI · 墨尔本找房</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<!-- 首屏标题用衬线(学术档案感),编号/坐标类小字用等宽。都有本地回退字体,离线不影响可用性。 -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Serif+SC:wght@500;600&display=swap">
 <link rel="stylesheet" href="/static/app.css">
+<!-- 宽屏首屏的城市沙盘(showroom/showroom.mjs)用 three.js 模块 -->
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
 </head>
 <body>
 <!-- data-stage 决定布局形态:welcome = 单列居中(没有结果时不摆空栏),
      working = 分栏。三个空白栏是"大块空白"的来源,不是样式问题。 -->
 <div id="app" data-stage="welcome">
   <header class="top">
-    <div class="brand">筑明AI</div>
+    <!-- 对话页点 logo 回首页(同「新对话」);首页上禁用 -->
+    <button type="button" class="brand" id="brand-home" aria-label="筑明AI" disabled><span class="brand-wordmark"><span class="brand-name">筑明</span><span class="brand-ai" aria-hidden="true">AI</span></span><span class="brand-tagline">A BETTER HOME</span></button>
     <div class="top-actions">
       <button id="btn-lang" class="link lang" type="button" title="Switch to English">EN</button>
-      <button id="btn-assume" class="link" type="button">假设</button>
       <button id="btn-new" class="link" type="button">新对话</button>
+      <!-- 收藏入口(favorites.js):登录后显示,数字是已收藏套数 -->
+      <button id="btn-favs" class="favs-open" type="button" hidden><svg class="fav-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 8 3.3 4.6 6.8 4.6c2.1 0 3.6 1.2 4.4 2.5.8-1.3 2.3-2.5 4.4-2.5 3.5 0 5.4 3.4 4.1 6.7-1.8 4.6-9.3 9.2-9.3 9.2z"/></svg><span class="favs-count">0</span></button>
+      <!-- 账号入口(auth.js):未登录显示「登录」,登录后换成用户名 + 下拉菜单 -->
+      <button id="btn-auth" class="auth-open" type="button" hidden>登录</button>
+      <div class="auth-user" id="auth-user" hidden>
+        <button id="btn-user" class="auth-user-btn" type="button" aria-haspopup="menu" aria-expanded="false">
+          <span class="auth-avatar" aria-hidden="true"></span><span class="auth-user-name"></span>
+        </button>
+        <div class="auth-menu" id="auth-menu" role="menu" hidden>
+          <div class="auth-menu-who"><b></b><span></span></div>
+          <button id="btn-menu-favs" type="button" role="menuitem">我的收藏</button>
+          <button id="btn-logout" type="button" role="menuitem">退出登录</button>
+        </div>
+      </div>
     </div>
   </header>
 
   <main class="layout">
     <section class="col col-chat">
-      <!-- 例子不再是标题下面那一排整齐的按钮,而是散在首屏空白处慢慢飘。
-           一排等宽胶囊读起来是"表单选项",而这几条是**例子** ——
-           松散地飘着才像"你可以这么问",不像"你只能选这四个"。
-           词条和坐标都是 app.js 每次进页面现算的,见 renderDrift()。 -->
-      <div id="driftfield" class="driftfield" role="group" aria-label="示例问句"></div>
+      <!-- 首屏(结构嵌入式):左侧索引栏 · 中间标题 · 右侧玻璃建筑。
+           示例词条嵌在建筑立面上随机轮换,锚点由 app.js 的 drawCity() 按实际几何算出。
+           .welcome 在首屏是 display:contents,子元素直接进 .col-chat 的网格。
+           索引栏是装饰性目录(除「找房」外暂无对应页面),不可点击,aria-hidden。 -->
       <div id="welcome" class="welcome">
-        <h1 class="welcome-h">探索你的理想居所</h1>
-        <p class="welcome-p">输入预算、区域或偏好。<br>所有评估数据均基于实测、假设校验与模型测算。</p>
+        <div class="hero-rail" aria-hidden="true">
+          <ol class="rail-index">
+            <li class="on"><b>01</b><span id="rail-1">找房</span></li>
+            <li><b>02</b><span id="rail-2">生活</span></li>
+            <li><b>03</b><span id="rail-3">社区</span></li>
+            <li><b>04</b><span id="rail-4">数据洞察</span></li>
+          </ol>
+          <div class="rail-foot"><span>AI</span><span>FOR A BETTER HOME</span></div>
+        </div>
+        <div class="hero-copy" data-drift-avoid>
+          <h1 class="welcome-h">更好的家,<br>从一个问题开始。</h1>
+          <p class="welcome-p">输入预算、区域或偏好。<br>所有评估数据均基于实测、假设校验与模型测算。</p>
+        </div>
+        <!-- 宽屏首屏:城市沙盘 + 户型样板(真实三维模型,光照烘焙)。点输入框镜头右移到户型,牌子可点。
+             加载成功时 #app 带 data-showroom="ready",CSS 才切到这个版式;否则保持下面的 SVG 城市。 -->
+        <div id="showroom" class="showroom">
+          <div id="showroom-view" class="showroom-view" aria-hidden="true"></div>
+          <div id="showroom-signs" class="showroom-signs"></div>
+          <!-- 左右转场箭头:右箭头 → 看户型,左箭头 → 回城市。与点输入框是同一个动作。 -->
+          <button type="button" class="sr-arrow sr-next" data-on="true" aria-label="看看户型样板">
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"></path></svg>
+          </button>
+          <button type="button" class="sr-arrow sr-back" data-on="false" aria-label="回到城市">
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"></path></svg>
+          </button>
+        </div>
+        <div id="hero-city" class="hero-city">
+          <svg id="city-svg" class="city-svg" aria-hidden="true"></svg>
+          <div id="driftfield" class="driftfield" role="group" aria-labelledby="drift-label" aria-live="off"></div>
+        </div>
       </div>
       <div id="chat" class="chat"></div>
-      <form id="composer" class="composer" autocomplete="off">
+      <div id="condition-dock" class="condition-dock"></div>
+      <form id="composer" class="composer" autocomplete="off" data-drift-avoid>
+        <svg class="composer-ico" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="M20 20l-4.8-4.8"></path></svg>
         <input id="input" type="text" placeholder="输入预算、区域或偏好,例如「100万内 · 近车站 · 3房」" enterkeyhint="send">
         <button type="submit" class="send" aria-label="发送">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M5 12l7-7 7 7"></path></svg>
         </button>
       </form>
+      <div id="follow-ups" class="follow-ups"></div>
+      <div class="drift-caption" data-drift-avoid>
+        <span class="dc-led" aria-hidden="true"></span>
+        <span id="drift-label">试试这样问</span>
+        <button id="btn-drift" type="button" aria-controls="driftfield" aria-pressed="false">暂停轮换</button>
+      </div>
+      <div class="hero-foot" aria-hidden="true"><span id="hero-foot">家 · 生活 · 可能性</span></div>
+      <div class="hero-meta" aria-hidden="true"><span>NESTWISE <i></i></span><span>MELBOURNE <i class="fill"></i></span></div>
     </section>
 
     <section class="col col-results">
@@ -46,13 +103,37 @@
     </section>
 
     <!-- 地图常驻,不再是「列表/地图」二选一。
-         署名单独放在右下角、盖在边缘渐隐之上 —— OSM 瓦片是 ODbL,署名是法律要求,
-         不能被消散效果吃掉。Leaflet 自带的 attributionControl 已关。 -->
-    <!-- 署名放在 .map-wrap **外面**:地图本体带了遮罩做边缘溶解,
-         署名在里面就会被一起溶掉。ODbL 要求署名可见,这是法律要求。 -->
+         毛玻璃面板:上沿 MAP.VIEW + 地图中心坐标,下沿城市选择 + 房源数。
+         城市目前只有墨尔本有数据,其余只是名字(标「即将支持」、不可选),不放假地图。
+         底图:OpenFreeMap 矢量瓦片(map-glass.js),拿不到时退回 OSM 栅格瓦片。
+         署名是法律要求(ODbL / OpenMapTiles),必须一直可见;Leaflet 自带的 attributionControl 已关。 -->
     <section class="col col-map">
-      <div class="map-wrap"><div id="map" class="map"></div></div>
-      <a class="map-attr" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a>
+      <div class="map-panel">
+        <div class="map-bar map-head">
+          <span class="mb-title">/ MAP.VIEW</span>
+          <span class="mb-coord" aria-hidden="true">COORDINATES <span id="map-coord">-37.8136, 144.9631</span></span>
+        </div>
+        <div class="map-wrap">
+          <div id="map" class="map"></div>
+          <div class="map-frost" aria-hidden="true"></div>
+          <div class="map-glass" aria-hidden="true"></div>
+          <div class="map-ctl" role="group">
+            <button type="button" id="map-fit" class="map-ctl-btn"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="5.2"/><circle cx="10" cy="10" r="1.6" class="dot"/><path d="M10 1.8v3M10 15.2v3M1.8 10h3M15.2 10h3"/></svg></button>
+            <i class="map-ctl-sep"></i>
+            <button type="button" id="map-zin" class="map-ctl-btn"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4.5v11M4.5 10h11"/></svg></button>
+            <button type="button" id="map-zout" class="map-ctl-btn"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 10h11"/></svg></button>
+          </div>
+          <div class="map-attr"><span class="attr-vector" hidden><a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">© OpenMapTiles</a> · </span><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a></div>
+        </div>
+        <div class="map-bar map-foot">
+          <div class="city">
+            <button type="button" id="city-btn" class="city-btn" aria-haspopup="listbox" aria-expanded="false"><span id="city-name">MELBOURNE</span><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.6 6 7.6l3-3"/></svg></button>
+            <ul id="city-menu" class="city-menu" role="listbox" hidden></ul>
+          </div>
+          <i class="mb-sep" aria-hidden="true"></i>
+          <span id="map-count" class="mb-count"></span>
+        </div>
+      </div>
     </section>
 
     <!-- 详情不再占一栏:窄屏是底部抽屉,宽屏从右侧滑出盖住地图。
@@ -65,7 +146,71 @@
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <!-- 文案表必须在 app.js 之前:app.js 一进 init 就要读 window.I18N -->
+  <!-- 登录 / 注册弹窗:原生 <dialog>,背后整页模糊(::backdrop)。可见性由 open 属性决定,不依赖动画。 -->
+  <dialog id="auth" class="auth" aria-labelledby="auth-title" data-mode="login">
+    <div class="auth-card">
+      <div class="auth-head">
+        <div class="auth-brand"><span class="brand-wordmark"><span class="brand-name">筑明</span><span class="brand-ai" aria-hidden="true">AI</span></span><span class="auth-tagline" data-t="tagline">A BETTER HOME</span></div>
+        <button type="button" class="auth-close" id="auth-close" aria-label="关闭"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+      </div>
+      <h2 class="auth-title" id="auth-title">欢迎回来</h2>
+      <p class="auth-sub" id="auth-sub">用用户名或邮箱登录筑明AI。</p>
+      <form id="auth-form" class="auth-form" novalidate>
+        <div class="auth-field" data-only="login"><label for="auth-login" data-t="login">用户名或邮箱</label>
+          <input id="auth-login" name="login" type="text" autocomplete="username" maxlength="254" autocapitalize="off" spellcheck="false">
+          <p class="auth-msg" id="auth-login-msg"></p></div>
+        <div class="auth-field" data-only="register"><label for="auth-username" data-t="username">用户名</label>
+          <input id="auth-username" name="username" type="text" autocomplete="username" maxlength="20" autocapitalize="off" spellcheck="false" aria-describedby="auth-username-msg">
+          <p class="auth-msg" id="auth-username-msg" data-hint="usernameHint">3–20 位,可用中文、字母、数字、下划线</p></div>
+        <div class="auth-field" data-only="register"><label for="auth-email"><span data-t="email">邮箱</span> <i data-t="optional">选填</i></label>
+          <input id="auth-email" name="email" type="email" autocomplete="email" maxlength="254" autocapitalize="off" spellcheck="false">
+          <p class="auth-msg" id="auth-email-msg"></p></div>
+        <div class="auth-field"><label for="auth-password" data-t="password">密码</label>
+          <div class="auth-pw"><input id="auth-password" name="password" type="password" autocomplete="current-password" maxlength="128"><button type="button" class="auth-eye" data-eye="auth-password" aria-pressed="false"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div>
+          <p class="auth-msg" id="auth-password-msg"></p></div>
+        <div class="auth-field" data-only="register"><label for="auth-confirm" data-t="confirm">确认密码</label>
+          <div class="auth-pw"><input id="auth-confirm" name="confirm" type="password" autocomplete="new-password" maxlength="128"><button type="button" class="auth-eye" data-eye="auth-confirm" aria-pressed="false"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div>
+          <p class="auth-msg" id="auth-confirm-msg"></p></div>
+        <p class="auth-error" id="auth-error" role="alert"></p>
+        <button type="submit" class="auth-submit" id="auth-submit">登录</button>
+      </form>
+      <p class="auth-switch"><span id="auth-switch-q">还没有账号?</span> <button type="button" id="auth-switch">注册</button></p>
+      <p class="auth-note" data-t="note">登录是可选的,不登录也可以直接找房。</p>
+    </div>
+  </dialog>
+<!-- 收藏抽屉:右侧滑出,背后模糊。只显示收藏时存下的房源事实字段(地址、成交价、户型)。 -->
+  <dialog id="favs" class="favs" aria-labelledby="favs-title">
+    <div class="favs-sheet">
+      <div class="favs-head">
+        <h2 id="favs-title">我的收藏</h2><span class="favs-total" id="favs-total"></span>
+        <button type="button" class="auth-close" id="favs-close" aria-label="关闭"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+      </div>
+      <!-- 排序 / 分组切换;收藏多于 20 套时出现搜索框 -->
+      <div class="favs-tools" id="favs-tools">
+        <div class="favs-seg" id="favs-seg" role="radiogroup">
+          <button type="button" role="radio" data-sort="recent">最近</button>
+          <button type="button" role="radio" data-sort="suburb">按区域</button>
+          <button type="button" role="radio" data-sort="price">按价格</button>
+        </div>
+        <button type="button" class="favs-cmp" id="favs-cmp" aria-pressed="false">并排对比</button>
+        <input class="favs-search" id="favs-search" type="search" autocomplete="off" spellcheck="false" hidden>
+      </div>
+      <ul class="favs-list" id="favs-list"></ul>
+      <p class="favs-nomatch" id="favs-nomatch" hidden></p>
+      <!-- 多选并排:勾 2–3 套,一起并排打开 -->
+      <div class="favs-actions" id="favs-actions" hidden>
+        <span class="favs-actions-hint" id="favs-actions-hint"></span>
+        <button type="button" class="favs-cmp-cancel" id="favs-cmp-cancel">取消</button>
+        <button type="button" class="favs-cmp-go" id="favs-cmp-go" disabled>并排打开(0/3)</button>
+      </div>
+      <div class="favs-empty" id="favs-empty" hidden><svg class="fav-icon" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 8 3.3 4.6 6.8 4.6c2.1 0 3.6 1.2 4.4 2.5.8-1.3 2.3-2.5 4.4-2.5 3.5 0 5.4 3.4 4.1 6.7-1.8 4.6-9.3 9.2-9.3 9.2z"/></svg><p class="favs-empty-t"></p><p class="favs-empty-h"></p></div>
+    </div>
+  </dialog>
+<script src="/static/map-glass.js"></script>
 <script src="/static/i18n.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/auth.js"></script>
+<script src="/static/favorites.js"></script>
+<script type="module" src="/static/showroom/showroom.mjs"></script>
 </body>
 </html>

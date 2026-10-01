@@ -11,6 +11,9 @@
 
 import json
 import sys
+import os
+from copy import deepcopy
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -170,14 +173,96 @@ with TestClient(server.app) as client:
         assert m["bedrooms"] == 3 and m["price"] <= 900000 and m["property_type"] == "house"
         # present 之后每套都要带这些事实字段,前端详情页靠它们
         for key in ("planning", "school_zones", "crime", "amenities", "context_scores", "context_evidence",
-                    "stamp_duty", "predicted_price", "valuation_range", "assumptions"):
+                    "stamp_duty", "predicted_price", "valuation_range", "valuation_interval",
+                    "valuation_position", "assumptions", "rent_source"):
             assert key in m, f"结果里缺 {key}"
+        # 审计 BUG-07:年租金是片区中位租金,匹配粒度必须随数字一起给到前端
+        assert m["rent_source"] in ("precinct_exact_sheet", "precinct_all_properties",
+                                    "region_exact_sheet", "region_all_properties")
         assert m["context_scores"]["quiet"] >= 60
         assert m["amenities"]["train_station"]["distance_m"] <= 1500
     done = next(d for e, d in events if e == "done")
     assert done["intent"] == "new_search" and done["count"] == len(metrics)
 
+    # 删除安静仍保留教育:必须重新调用数据库检索,不是重排上一批 5/20 套。
+    before_delete = deepcopy(params)
+    before_delete["abstract_needs"].append({"attribute": "school_access", "min_score": 60})
+    response = client.post("/api/refine", json={"thread_id": thread, "params": before_delete})
+    base_events = _events(response.text)
+    assert base_events[-1][0] == "done", base_events[-1]
+    baseline = next(d for e, d in base_events if e == "done")["params"]
+    removed = deepcopy(baseline)
+    removed["abstract_needs"] = [n for n in removed["abstract_needs"] if n["attribute"] != "quiet"]
+    # 模拟旧客户端仍携带 quiet 排序与旧描述,后端必须兜住。
+    removed["semantic_query"] = "peaceful quiet three bedroom house away from traffic"
+    with patch.object(g, "search_properties", wraps=g.search_properties) as queried:
+        response = client.post("/api/refine", json={"thread_id": thread, "params": removed})
+        assert queried.call_count == 1, "删除条件没有重新检索数据库"
+        args = queried.call_args.kwargs
+        assert args["limit"] == g.CANDIDATE_LIMIT and args["bedrooms"] == 3
+        assert not any(word in args["semantic_query"].lower() for word in ("quiet", "peaceful", "traffic"))
+    deletion_events = _events(response.text)
+    assert deletion_events[-1][0] == "done", deletion_events[-1]
+    deleted = next(d for e, d in deletion_events if e == "done")
+    assert deleted["params"]["sort_by"] is None
+    assert deleted["params"]["abstract_needs"] == [{"attribute": "school_access", "min_score": 60}]
+    assert deleted["params"]["max_price"] == 900000 and deleted["params"]["property_type"] == "house"
+    assert "按语义相关度排序" in deleted["ranking"] and "安静" not in deleted["ranking"]
+    assert [d["node"] for e, d in deletion_events if e == "node"] == ["search", "analyze", "enrich", "rank", "present", "explain"]
+    # 可选导出真实数据库响应给浏览器回归重放,不提交数据副本、不调用真实 LLM。
+    if os.environ.get("REFINE_FIXTURE_PATH"):
+        fixture = {"initial": {"params": baseline,
+                    "metrics": next(d for e, d in base_events if e == "results")["metrics"]},
+                   "removed": {"params": deleted["params"],
+                    "metrics": next(d for e, d in deletion_events if e == "results")["metrics"]}}
+        Path(os.environ["REFINE_FIXTURE_PATH"]).write_text(json.dumps(fixture, ensure_ascii=False), encoding="utf-8")
+
+    # 删除偏好不得清掉不相关排序;显式再选择安静排序仍然允许。
+    other_sort = {**removed, "sort_by": "price_asc"}
+    assert g.prepare_refinement(other_sort, baseline)["sort_by"] == "price_asc"
+    assert g.prepare_refinement({**deleted["params"], "sort_by": "quiet"}, deleted["params"])["sort_by"] == "quiet"
+    assert g.prepare_refinement(removed, {}, ["quiet"])["sort_by"] is None, "旧页面在服务重启后删除也必须生效"
+
+    # 搜索失败 / 已发出结果后的执行异常都恢复参数、结果及历史。
+    config = g.new_session(thread)
+    committed = deepcopy(server.GRAPH.get_state(config).values)
+    original_stream = server.GRAPH.stream
+    def stream_then_fail(*args, **kwargs):
+        for event in original_stream(*args, **kwargs):
+            yield event
+            if event[0] == "updates" and "present" in event[1]:
+                raise RuntimeError("intentional failure after results")
+    for failure in (patch.object(g, "search_properties", side_effect=RuntimeError("intentional search failure")),
+                    patch.object(server.GRAPH, "stream", side_effect=stream_then_fail)):
+        with failure:
+            response = client.post("/api/refine", json={"thread_id": thread, "params": other_sort})
+        failed_events = _events(response.text)
+        assert failed_events[-1][0] == "error" and not failed_events[-1][1].get("rollback_failed"), failed_events[-1]
+        restored = server.GRAPH.get_state(config).values
+        for key in ("params", "metrics", "more", "ranking", "history", "user_query", "batch_offset"):
+            assert restored.get(key) == committed.get(key), f"失败后没有恢复 {key}"
+    lock = server._lock_for(thread)
+    lock.acquire()
+    try:
+        response = client.post("/api/refine", json={"thread_id": thread, "params": other_sort})
+        assert _events(response.text)[0][0] == "error"
+        assert server.GRAPH.get_state(config).values["params"] == committed["params"], "繁忙会话的条件被提前覆盖"
+    finally:
+        lock.release()
+
     # ---------------------------------------------------------------- 条件卡改动:不经 LLM 续跑
+    # 实际数据库检索必须遵守新的比较符号,并把它回传给页面与后续会话。
+    below = deepcopy(deleted["params"])
+    below["abstract_needs"] = [{"attribute": "quiet", "min_score": 60, "operator": "lt"}]
+    below["amenity_needs"] = []
+    below["planning_needs"] = []
+    events = _events(client.post("/api/refine", json={"thread_id": thread, "params": below}).text)
+    assert events[-1][0] == "done", events[-1]
+    below_metrics = next(d for e, d in events if e == "results")["metrics"]
+    assert below_metrics and all(m["context_scores"]["quiet"] < 60 for m in below_metrics)
+    assert events[-1][1]["params"]["abstract_needs"] == below["abstract_needs"]
+    assert "评分 < 60" in events[-1][1]["ranking"]
+
     edited = dict(params)
     edited["bedrooms"] = 2
     edited["sort_by"] = "gross_yield"

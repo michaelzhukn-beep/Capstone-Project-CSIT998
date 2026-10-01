@@ -21,6 +21,7 @@ parse_intent 和 explain 是仅有的两个 LLM 节点,前者把话变成参数�
 """
 
 import json
+from copy import deepcopy
 import operator
 import re
 from typing import Annotated, TypedDict
@@ -30,11 +31,12 @@ from langgraph.graph import END, StateGraph
 
 from app.amenities import context, nearby, planning, registry, suburb_stats, zones
 from app.analytics import assumptions
-from app.analytics.formulas import investment_metrics
+from app.analytics.formulas import investment_metrics, roi_certified_prefix, roi_unrounded
 from app.analytics.valuation import predict_values
 from app.core.config import require_llm_config
 from app import i18n
-from app.search.search import search_properties
+from app.search.search import properties_by_ids, search_properties
+from app.orchestration import refinement
 
 # ---------------------------------------------------------------- 状态
 
@@ -59,9 +61,20 @@ class State(TypedDict):
     # 界面语言。只影响**输出**:排序口径那几句、没结果时的说明、以及 explain
     # 让 LLM 用哪种语言写。解析用户输入不看它 —— 用户用哪种语言问都得能听懂。
     lang: str
+    # 检索层按哪一列取的候选(price_asc / price_desc / gross_yield),None = 按语义相关度。
+    # 决定排序说明里能不能说"全库"。
+    search_order: str | None
+    # 按 ROI 取候选池被截断时:{"cutoff": 池里最后一套的不取整 ROI, "other_costs": 当时用的杂费};
+    # rank 用它证明前几名不会被池外房源超过(formulas.roi_certified_prefix)。没被截断 = None。
+    roi_pool: dict | None
+    # 本次请求的假设快照 {"opex_rate","other_costs","display"}:search 读一次,预排序、每轮扩容、analyze 的指标与展示的 assumptions
+    # 都用这一份;进程级假设在两个节点之间被 /api/assumptions 改掉也不会让它们各算各的。None = 没经过 search(如按编号取详情)。
+    assumption_snap: dict | None
     place_lookup: dict | None  # 具名地点解析结果(找到几个 / 没找到)
     zone_lookup: dict | None   # 学区解析结果(找到几个 / 没找到)
     answer: str                # 最终回答
+    refinement_base: dict | None  # 本轮修改前的完整结果,无兼容结果时恢复
+    turn_notice: str | None       # 澄清/无兼容结果的确定性说明,不让 LLM 编结果
     # 对话历史。用 operator.add 做 reducer,所以每个节点返回的是"要追加的",
     # 不是"完整的新值"。LangGraph 的状态字段默认是覆盖语义,列表要累积必须
     # 显式声明 reducer,否则第二轮会把第一轮冲掉。
@@ -94,9 +107,118 @@ def _sort_label(state, key: str) -> str:
     return (i18n.sort_labels_en(_SORT_LABEL)[key] if _en(state) else _SORT_LABEL[key])
 
 
+_PROPERTY_PARKING_ASK = "房源车位"
+_PROPERTY_PARKING_LABELS = frozenset({"房源车位", "车位", "停车位", "车库", "car space", "car spaces",
+                                      "garage", "garages", "property parking", "property car spaces"})
+_PUBLIC_PARKING_RE = re.compile(
+    r"公共停车(?:场|位)|停车场|(?:靠近|附近|周边|旁边)(?:有|的|公共){0,2}停车位|停车(?:控制|分区|规划|管制)"
+    r"|\bpublic\s+parking\b"
+    r"|\bparking\s+(?:overlay|precinct|restriction|control|zone|plan)\b"
+    r"|\b(?:near|nearby|close\s+to)\s+(?:(?:a|the)\s+)?(?:public\s+)?car\s+parks?\b"
+    r"|\b(?:the\s+)?garage\s+(?:cafe|restaurant|bar)\b", re.I)
+_PARKING_TERM_RE = re.compile(r"车位|停车位|停车场|车库|\b(?:car\s+spaces?|car\s+parks?|parking|garages?)\b", re.I)
+_PROPERTY_PARKING_RE = (
+    re.compile(r"(?:房子|房源|公寓|住宅|这套|第[0-9一二三四五六七八九十]+套).{0,12}?"
+               r"(?P<owned>(?:要有|要带|自带|带有|配有|需要|不需要|不要|不带|不能有|没有|有|要)"
+               r"(?:至少)?(?:[0-9一二三四五六七八九十]+个?)?(?:车位|停车位|车库))"),
+    re.compile(r"(?P<owned>(?:要有|要带|自带|带有|配有|需要|不需要|不要|不带|必须有|必须要)"
+               r"(?:至少)?(?:[0-9一二三四五六七八九十]+个?)?(?:车位|停车位|车库))"),
+    re.compile(r"\b(?P<owned>(?:with|without|has|have|needs?|wants?|requires?|must\s+have)\s+"
+               r"(?:(?:a|an)\s+|at\s+least\s+\d+\s+)?"
+               r"(?:car\s+spaces?|car\s+parks?|parking(?:\s+spaces?)?|garages?(?!\s+(?:cafe|restaurant|bar))))\b", re.I),
+)
+_DERIVED_BARE_SPACE_RE = re.compile(r"(?:garages?|car\s+spaces?|车位|停车位|车库)", re.I)
+_DERIVED_AFTER_HOME_RE = re.compile(
+    r"\b(?:house|home|property|apartment|flat|unit)\b(?:\s+\w+){0,4}?\s+"
+    r"(?P<bare>garages?|car\s+spaces?|parking)\b(?=\s*(?:$|[,;]))", re.I)
+
+
+def _property_parking_spans(text) -> list[tuple[int, int]]:
+    """Only explicit property-owned parking clauses; public places are protected."""
+    if not isinstance(text, str):
+        return []
+    public = [match.span() for match in _PUBLIC_PARKING_RE.finditer(text)]
+    spans = []
+    for pattern in _PROPERTY_PARKING_RE:
+        for match in pattern.finditer(text):
+            start, end = match.span("owned")
+            if any(start < stop and end > begin for begin, stop in public):
+                continue
+            spans.append((start, end))
+    result = []
+    for start, end in sorted(set(spans), key=lambda pair: (pair[0], -(pair[1] - pair[0]))):
+        if not result or start >= result[-1][1]:
+            result.append((start, end))
+    return result
+
+
+def _parking_kind(text) -> str | None:
+    """Property, ambiguous, or absent/public; ambiguity never triggers query deletion."""
+    if not isinstance(text, str):
+        return None
+    if _property_parking_spans(text):
+        return "property"
+    public = [match.span() for match in _PUBLIC_PARKING_RE.finditer(text)]
+    for match in _PARKING_TERM_RE.finditer(text):
+        start, end = match.span()
+        if not any(start < stop and end > begin for begin, stop in public):
+            return "ambiguous"
+    return None
+
+
+def _without_property_parking(text: str) -> str:
+    """Remove only recognised owned-parking clauses; leave all other text intact."""
+    spans = _property_parking_spans(text)
+    if not spans:
+        return text
+    parts, cursor = [], 0
+    for start, end in spans:
+        parts.append(text[cursor:start])
+        cursor = end
+    parts.append(text[cursor:])
+    return re.sub(r"\s+", " ", "".join(parts)).strip(" ,;，；、")
+
+
+def _without_derived_property_parking(text: str, original_query: str) -> str:
+    """Within an explicit owned-space request, remove narrowly derived labels.
+
+    A bare parser label or a trailing home + label is safe to drop. Public
+    parking phrases and named places elsewhere in the text stay unchanged.
+    """
+    cleaned = _without_property_parking(text)
+    bare = cleaned.strip()
+    if _DERIVED_BARE_SPACE_RE.fullmatch(bare):
+        if bare.casefold().startswith("garage") and re.search(r"\bgarage\s+(?:cafe|restaurant|bar)\b", original_query, re.I):
+            return cleaned  # Could name the venue; keep ambiguous derived text.
+        return ""
+    if bare.casefold() == "parking" and not _PUBLIC_PARKING_RE.search(original_query):
+        return ""
+    public = [match.span() for match in _PUBLIC_PARKING_RE.finditer(cleaned)]
+    for match in reversed(list(_DERIVED_AFTER_HOME_RE.finditer(cleaned))):
+        start, end = match.span("bare")
+        if any(start < stop and end > begin for begin, stop in public):
+            continue  # A derived tail can still name a public facility.
+        cleaned = cleaned[:start] + cleaned[end:]
+    return re.sub(r"\s+", " ", cleaned).strip(" ,;，；、")
+
+
+def _unsupported_en(ask: str) -> str:
+    return "property car spaces" if ask == _PROPERTY_PARKING_ASK else i18n.UNSUPPORTED_KEY_EN.get(ask, ask)
+
+
+def _parking_notice(state, kind: str | None) -> str | None:
+    if kind == "property":
+        return _t(state, "房源自带车位目前无法核验，未按车位筛选；结果不代表满足这项要求。",
+                  "A property's own parking spaces cannot currently be verified. No parking filter was applied; the results do not establish this requirement.")
+    if kind == "ambiguous":
+        return _t(state, "如果你指房源自带车位，目前无法核验；原查询保留，结果不能据此判断有无车位。",
+                  "If you mean a property's own parking spaces, they cannot currently be verified. Your query was kept; these results do not establish parking availability.")
+    return None
+
+
 def _unsupported_list(state, asks) -> str:
     if _en(state):
-        return ", ".join(i18n.UNSUPPORTED_KEY_EN.get(a, a) for a in asks)
+        return ", ".join(_unsupported_en(a) for a in asks)
     return "、".join(asks)
 
 
@@ -180,11 +302,14 @@ SEARCH_KEYS = (
 # V2 新增:排序与指标门槛。这两个**不进数据库**,因为它们依赖的是算出来的指标
 # (回报率、Cap Rate),而不是表里的列。所以它们在 rank 节点里生效。
 RANK_KEYS = ("sort_by", "min_gross_yield", "amenity_needs", "near_place",
-             "abstract_needs", "unsupported_asks", "school_zone", "planning_needs")
-PARAM_KEYS = SEARCH_KEYS + RANK_KEYS
+             "abstract_needs", "unsupported_asks", "school_zone", "planning_needs", "relative_preferences")
+PARAM_KEYS = SEARCH_KEYS + RANK_KEYS + ("description_query",)
+# 由程序根据 changes 计算、模型从不填写的字段。提示词示例里不出现它们
+# (tests/test_planning.py 按"PARAM_KEYS 减去这些"检查示例是否齐全)。
+PROGRAM_KEYS = ("relative_preferences",)
 
 # 这句话是要干什么。V3 加的,决定走哪条分支。
-_INTENTS = ("new_search", "refine", "about_results", "concept")
+_INTENTS = ("new_search", "refine", "about_results", "concept", "clarify")
 
 _INT_KEYS = ("max_price", "min_price", "bedrooms", "bathrooms")
 _PROPERTY_TYPES = ("house", "apartment", "townhouse")
@@ -194,6 +319,11 @@ _SORT_FIELDS = ("gross_yield", "cap_rate", "roi", "predicted_gap", "predicted_ga
 # 抽象属性也能当排序口径("最安静的那几套")。它们的分数在 enrich 里算,
 # 定义见 app/amenities/context.py。
 _ABSTRACT_KEYS = context.ATTRIBUTE_KEYS
+# min_score 保留为旧会话/API 的阈值字段;operator 决定比较方向,省略时兼容 ≥。
+_SCORE_OPERATORS = {
+    "gte": ("≥", operator.ge), "gt": (">", operator.gt),
+    "lte": ("≤", operator.le), "lt": ("<", operator.lt), "eq": ("=", operator.eq),
+}
 
 # ---------------------------------------------------------------- V7:规划分区
 #
@@ -231,7 +361,7 @@ _PARSE_SYSTEM = """你是房产搜索的参数抽取器。把用户的中文或�
                    "new_search"    全新的找房需求,和上一轮无关
                                    例:上轮问 Richmond 三房,这轮说"帮我找便宜的公寓"
                    "refine"        在上一轮基础上改条件,重新找
-                                   例:"只看 Richmond 的""再便宜点""改成三房""要带车位的"
+                                   例:"只看 Richmond 的""再便宜点""改成三房"
                    "about_results" 针对**上一轮已经给出的那几套房**提问,不需要重新找
                    例:"第 3 套详细说说""为什么第 2 套估这个价""哪套最划算"
                    "concept"       问概念、名词、公式,和具体房源无关
@@ -243,8 +373,8 @@ _PARSE_SYSTEM = """你是房产搜索的参数抽取器。把用户的中文或�
                    其余 -> new_search。**第一轮永远是 new_search 或 concept。**
 
   ↓ 下面这些字段:intent 是 about_results 或 concept 时,全部填 null / [],
-    因为这两种情况不会重新检索。intent 是 refine 时,**在上一轮条件的基础上
-    改**:用户没提到的条件要**沿用上一轮的值**,提到的才改。
+    因为这两种情况不会重新检索。intent 是 refine 时**不要填这些字段**,
+    只在 changes 里列出本轮修改(格式见文末「多轮修改协议」),没改的条件由程序保留。
     intent 是 new_search 时,只按这一句话填,不要继承上一轮任何条件。
 
   semantic_query : string —— **必须用英文**。用户对房子本身的描述性要求,
@@ -291,7 +421,11 @@ _PARSE_SYSTEM = """你是房产搜索的参数抽取器。把用户的中文或�
                      -> [{"kind":"kindergarten","max_distance_m":1500},
                          {"kind":"primary_school","max_distance_m":1500}]
   abstract_needs : 数组,用户对**居住环境**的要求。没有就填 []。
-                   每项形如 {"attribute": "quiet", "min_score": 60}
+                   每项形如 {"attribute": "quiet", "min_score": 60, "operator": "gte"}。
+                   operator 可为 gte(≥)、gt(>)、lte(≤)、lt(<)、eq(=);未指定则默认 gte。
+                   min_score 是比较阈值,无论比较方向如何均用此字段,允许 0 和 100。
+                   例:"安静低于 60 分" -> {"attribute":"quiet","min_score":60,"operator":"lt"}。
+                   继续修改条件时必须保留当前 operator,不要把 < / ≤ / = 擅自改回 ≥。
                    attribute **只能**是下面清单里的。你的任务是把用户任意的说法
                    映射到清单上 —— 用户的措辞是无穷的,这份清单是有限的,
                    **映射是你的工作,不要因为用词不同就放弃**。
@@ -309,8 +443,9 @@ _PARSE_SYSTEM = """你是房产搜索的参数抽取器。把用户的中文或�
                      "安静一点的" -> 60    "要很安静" -> 75    "必须非常安静" -> 85
                    没有明确语气就填 60。
 
-                   **quiet 和 lively 互斥**(实测相关系数 −0.80),用户不会同时要;
-                   两者都像时选更强调的那个。
+                   quiet 和 lively 可以同时存在,负相关不代表逻辑互斥。不得擅自删除任何一项。
+                   strength 为 required/preferred;value_source 为 explicit/inferred,
+                   用于区分用户指定的分数与系统根据模糊表达推断的默认门槛。
 
   unsupported_asks: 数组,用户提了但**本系统没有数据**的要求。没有就填 []。
                    每项是一个简短的中文词。**这一项非常重要:宁可明说没有,
@@ -329,6 +464,13 @@ _PARSE_SYSTEM = """你是房产搜索的参数抽取器。把用户的中文或�
 
                    以下这些都要放进 unsupported_asks,**不要**映射到任何字段:
 @@UNSUPPORTED@@
+
+                   房源**自带**车位/车库目前无法核验。明确要求房子带车位或不带车位时,
+                   把「房源车位」放进 unsupported_asks,不得当筛选条件、推荐理由,
+                   也不要把这项要求写进 semantic_query 或 description_query。
+                   附近公共停车场、规划 Parking Overlay、The Garage Cafe 等地点名称
+                   与房源自带车位不同:保留其原本搜索意思,不要标成「房源车位」。
+                   单独出现 parking/garage 等含义不明的词时保留原查询,不要臆断为房源车位。
 
                    例:"要采光好、治安好的安静三房"
                      -> abstract_needs 里只有 quiet,
@@ -404,43 +546,42 @@ max_price=null 的意思是"不筛价格";max_price=0 的意思是"要 0 元以�
 
 例(第一轮,没有历史):
 用户:帮我找 80 万以下、租金回报不错的两房
-{"intent": "new_search", "semantic_query": "two bedroom investment property", "max_price": 800000, "min_price": null, "bedrooms": 2, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "gross_yield", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": []}
+{"intent": "new_search", "semantic_query": "two bedroom investment property", "max_price": 800000, "min_price": null, "bedrooms": 2, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "gross_yield", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
 
 例(接着上一轮,用户说"再便宜点,而且要离火车站近"):
-{"intent": "refine", "semantic_query": "two bedroom investment property", "max_price": 600000, "min_price": null, "bedrooms": 2, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "gross_yield", "min_gross_yield": null, "amenity_needs": [{"kind": "train_station", "max_distance_m": 800}], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": []}
-(注意:max_price 从 800000 改成了 600000,bedrooms=2 和 sort_by 都**沿用**了上一轮)
+{"intent": "refine", "changes": [{"action": "relative", "field": "price", "direction": "decrease", "degree": "slight", "source": "再便宜点"}, {"action": "set", "field": "amenity_needs", "value": {"kind": "train_station", "max_distance_m": 800}, "source": "离火车站近"}], "clarification": null}
 
 例(用户:我有小孩,想找离莫纳什大学近、附近有小学的三房):
-{"intent": "new_search", "semantic_query": "family home", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "near_place_distance", "min_gross_yield": null, "amenity_needs": [{"kind": "primary_school", "max_distance_m": 1500}], "near_place": {"name": "Monash University", "kind": "university", "max_distance_m": null}, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": []}
+{"intent": "new_search", "semantic_query": "family home", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "near_place_distance", "min_gross_yield": null, "amenity_needs": [{"kind": "primary_school", "max_distance_m": 1500}], "near_place": {"name": "Monash University", "kind": "university", "max_distance_m": null}, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
 
 例(用户:安静一点的三房独栋,别靠马路):
-{"intent": "new_search", "semantic_query": "three bedroom house", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": "house", "suburb": null, "sort_by": "quiet", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "quiet", "min_score": 60}], "unsupported_asks": [], "school_zone": null, "planning_needs": []}
+{"intent": "new_search", "semantic_query": "three bedroom house", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": "house", "suburb": null, "sort_by": "quiet", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "quiet", "min_score": 60}], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
 
 例(用户:找个热闹、生活方便的公寓):
-{"intent": "new_search", "semantic_query": "apartment", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": "apartment", "suburb": null, "sort_by": "lively", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "lively", "min_score": 60}, {"attribute": "convenient", "min_score": 60}], "unsupported_asks": [], "school_zone": null, "planning_needs": []}
+{"intent": "new_search", "semantic_query": "apartment", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": "apartment", "suburb": null, "sort_by": "lively", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "lively", "min_score": 60}, {"attribute": "convenient", "min_score": 60}], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
 
 例(用户:带孩子住,要安静点,最好附近有小学,采光也要好):
-{"intent": "new_search", "semantic_query": "family home", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "family", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "family", "min_score": 60}, {"attribute": "quiet", "min_score": 60}, {"attribute": "school_access", "min_score": 60}], "unsupported_asks": ["采光"], "school_zone": null, "planning_needs": []}
+{"intent": "new_search", "semantic_query": "family home", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "family", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "family", "min_score": 60}, {"attribute": "quiet", "min_score": 60}, {"attribute": "school_access", "min_score": 60}], "unsupported_asks": ["采光"], "school_zone": null, "planning_needs": [], "description_query": null}
 
 例(用户:父母要住,看病方便点,房子得宽敞,治安也重要):
-{"intent": "new_search", "semantic_query": "spacious home", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "medical", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "medical", "min_score": 60}, {"attribute": "spacious", "min_score": 60}], "unsupported_asks": ["治安"], "school_zone": null, "planning_needs": []}
+{"intent": "new_search", "semantic_query": "spacious home", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "medical", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "medical", "min_score": 60}, {"attribute": "spacious", "min_score": 60}], "unsupported_asks": ["治安"], "school_zone": null, "planning_needs": [], "description_query": null}
 
 例(用户:要在 Balwyn 小学学区内的三房):
-{"intent": "new_search", "semantic_query": "three bedroom home", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": {"school": "Balwyn Primary School", "level": "primary"}, "planning_needs": []}
+{"intent": "new_search", "semantic_query": "three bedroom home", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": {"school": "Balwyn Primary School", "level": "primary"}, "planning_needs": [], "description_query": null}
 
 例(用户:想买个老房子推倒重建,周围以后别盖起高楼):
-{"intent": "new_search", "semantic_query": "older house for redevelopment", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": "house", "suburb": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": ["no_heritage", "low_density_around"]}
+{"intent": "new_search", "semantic_query": "older house for redevelopment", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": "house", "suburb": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": ["no_heritage", "low_density_around"], "description_query": "older house for redevelopment"}
 
 例(用户:找个安静的三房,别买到将来要拆迁或者会淹水的,顺便说下会不会升值):
-{"intent": "new_search", "semantic_query": "quiet three bedroom home", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "quiet", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "quiet", "min_score": 60}], "unsupported_asks": ["升值潜力"], "school_zone": null, "planning_needs": ["no_risk_overlay"]}
+{"intent": "new_search", "semantic_query": "quiet three bedroom home", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "quiet", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "quiet", "min_score": 60}], "unsupported_asks": ["升值潜力"], "school_zone": null, "planning_needs": ["no_risk_overlay"], "description_query": null}
 (注意:"拆迁"和"淹水"都是 no_risk_overlay 能覆盖的**登记事实**;
  "会不会升值"是预测,分区数据答不了,进 unsupported_asks)
 
 例(用户:第 3 套为什么估值这么高):
-{"intent": "about_results", "semantic_query": null, "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": []}
+{"intent": "about_results", "semantic_query": null, "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
 
 例(用户:cap rate 是什么意思):
-{"intent": "concept", "semantic_query": null, "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": []}
+{"intent": "concept", "semantic_query": null, "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
 """
 
 
@@ -452,7 +593,7 @@ _PARSE_SYSTEM = (
     .replace("@@ATTRIBUTES@@", registry.prompt_block())
     .replace("@@UNSUPPORTED@@", registry.unsupported_block())
     .replace("@@AMENITY_KINDS@@", registry.amenity_kinds_block())
-)
+) + refinement.PATCH_PROMPT
 assert "@@" not in _PARSE_SYSTEM, "提示词里还有没被替换掉的占位符"
 
 
@@ -502,13 +643,47 @@ def _typo_source(suburb: str, user_query: str) -> str | None:
     return hit[0]
 
 
-def _sanitize(raw: dict, user_query: str) -> dict:
+# 估值方向的说法 → 排序方向。**由代码判定,不交给 LLM。**
+#
+# 实测(每种说法重复 3 次):「Richmond 附近,售价低于估值的两房」3/3 被解析成
+# predicted_gap_neg(卖贵了),「售价低于估值的房子」1/3 解析反;「被低估」「卖贵了」
+# 全对。模型看到"低于"两个字就往"估值低于售价"那边靠 —— 提示词里明写了也挡不住。
+# 方向一反,用户拿到的正好是他要的反面,而且结果看起来完全正常,没人会发现。
+#
+# 注意子串关系:「售价低于估值」含「低于估值」,「估值低于售价」含「低于售价」,
+# 两组关键词互不包含,所以不会互相误判。「高估值/低估值」(估值本身高低)用负向断言排除。
+_GAP_UP = re.compile(r"(售价|价格|报价|指导价)?低于(模型)?估值|估值高于(售价|价格|报价|指导价)|被低估|低估(?!值)|捡漏"
+                     r"|under-?valued|below (its |the )?(model )?(estimate|valuation)|priced below", re.I)
+_GAP_DOWN = re.compile(r"(售价|价格|报价|指导价)?高于(模型)?估值|估值低于(售价|价格|报价|指导价)|被高估|高估(?!值)|卖贵"
+                       r"|over-?valued|over-?priced|above (its |the )?(model )?(estimate|valuation)|priced above", re.I)
+
+
+def _valuation_direction(user_query: str, sort_by):
+    """用户原话里有明确的估值方向时,排序方向以原话为准。
+
+    只在 LLM 没选排序、或选了两种估值排序之一时介入 —— 用户同时要"回报最高"之类别的排序时,
+    不去覆盖它。两个方向的词同时出现(自相矛盾)时不猜,保留 LLM 的结果。
+    """
+    if sort_by not in (None, "predicted_gap", "predicted_gap_neg"):
+        return sort_by
+    up, down = bool(_GAP_UP.search(user_query or "")), bool(_GAP_DOWN.search(user_query or ""))
+    if up and not down:
+        return "predicted_gap"
+    if down and not up:
+        return "predicted_gap_neg"
+    return sort_by
+
+
+def _sanitize(raw: dict, user_query: str, *, preserve_property_parking=False,
+              allow_property_parking=True) -> dict:
     """把模型给的东西收拾成 search_properties() 能安全接收的参数。
 
     这里是"第一版最容易翻车的地方"的最后一道闸:0、负数、空字符串一律降级成
     None(= 不筛这一项)。宁可搜得宽,不要搜得空。
     """
     params: dict = {key: None for key in PARAM_KEYS}
+    if isinstance(raw.get("description_query"), str):
+        params["description_query"] = raw["description_query"].strip()[:500] or None
 
     for key in _INT_KEYS:
         value = raw.get(key)
@@ -537,6 +712,7 @@ def _sanitize(raw: dict, user_query: str) -> dict:
     sort_by = raw.get("sort_by")
     if isinstance(sort_by, str) and sort_by.strip() in _SORT_FIELDS:
         params["sort_by"] = sort_by.strip()
+    params["sort_by"] = _valuation_direction(user_query, params["sort_by"])
 
     mgy = raw.get("min_gross_yield")
     if not isinstance(mgy, bool) and isinstance(mgy, (int, float)) and mgy > 0:
@@ -566,20 +742,34 @@ def _sanitize(raw: dict, user_query: str) -> dict:
         if not isinstance(attr, str) or attr.strip() not in _ABSTRACT_KEYS:
             continue
         floor = item.get("min_score")
-        if isinstance(floor, bool) or not isinstance(floor, (int, float)) or not 0 < floor <= 100:
+        if isinstance(floor, bool) or not isinstance(floor, (int, float)) or not 0 <= floor <= 100:
             floor = 60      # "高于平均水平"这个语气的默认门槛
-        wanted.append({"attribute": attr.strip(), "min_score": int(floor)})
-    # quiet 和 lively 实测相关系数 -0.80,同时要就是自相矛盾。保留先出现的那个,
-    # 并在 rank 里如实告诉用户"这两个要求冲突,已按前者处理"。
-    attrs = [w["attribute"] for w in wanted]
-    if "quiet" in attrs and "lively" in attrs:
-        drop = "lively" if attrs.index("quiet") < attrs.index("lively") else "quiet"
-        wanted = [w for w in wanted if w["attribute"] != drop]
-        params["_conflict"] = drop
+        need = {"attribute": attr.strip(), "min_score": int(floor)}
+        if "operator" in item:
+            op = item["operator"]
+            need["operator"] = op if isinstance(op, str) and op in _SCORE_OPERATORS else "gte"
+        for key, allowed in (("strength", ("required", "preferred")),
+                             ("value_source", ("explicit", "inferred"))):
+            if item.get(key) in allowed:
+                need[key] = item[key]
+        wanted.append(need)
     params["abstract_needs"] = wanted or None
+    params["relative_preferences"] = refinement.valid_goals(raw.get("relative_preferences")) or None
 
     asks = [a.strip() for a in (raw.get("unsupported_asks") or [])
             if isinstance(a, str) and a.strip()]
+    parking_kind = _parking_kind(user_query)
+    had_property_parking = any(ask.casefold() in _PROPERTY_PARKING_LABELS for ask in asks)
+    # Only canonical owned-space labels are normalised. Public-facility data
+    # gaps and other unsupported asks keep their original meaning.
+    asks = [ask for ask in asks if ask.casefold() not in _PROPERTY_PARKING_LABELS]
+    if allow_property_parking and (parking_kind == "property" or
+                                   (preserve_property_parking and had_property_parking)):
+        asks.insert(0, _PROPERTY_PARKING_ASK)
+    if allow_property_parking and parking_kind == "property":
+        params["semantic_query"] = _without_derived_property_parking(params["semantic_query"], user_query) or "property"
+        if params["description_query"]:
+            params["description_query"] = _without_derived_property_parking(params["description_query"], user_query) or None
     params["unsupported_asks"] = asks[:6] or None      # 截断,防止模型灌一长串
 
     # 规划分区要求。词表之外的一律丢掉 —— 模型编一个 "no_noise" 出来,
@@ -615,6 +805,61 @@ def _sanitize(raw: dict, user_query: str) -> dict:
     return params
 
 
+def prepare_refinement(raw: dict, previous: dict, removed_attributes=(), user_query=None,
+                       preserve_property_parking=None, allow_property_parking=True) -> dict:
+    """条件卡以当前条件为准,删除偏好时同步清除关联排序和旧检索描述。
+
+    不能靠删英文关键词:同一偏好可能写成 quiet / peaceful / away from traffic。
+    条件集合变化时从保留下来的结构化条件重建英文检索描述,评分和门槛仍由原流程执行。
+    只切排序/语言时保持原检索描述;不引入一次额外的 LLM 解析。
+    """
+    if preserve_property_parking is None:
+        preserve_property_parking = _PROPERTY_PARKING_ASK in (previous.get("unsupported_asks") or [])
+    clean = _sanitize(dict(raw), user_query or raw.get("semantic_query") or previous.get("semantic_query") or "property",
+                      preserve_property_parking=preserve_property_parking,
+                      allow_property_parking=allow_property_parking)
+    old_attrs = {n["attribute"] for n in previous.get("abstract_needs") or []}
+    active = {n["attribute"] for n in clean.get("abstract_needs") or []}
+    removed = (old_attrs | (set(removed_attributes) & set(_ABSTRACT_KEYS))) - active
+    if clean.get("sort_by") in removed:
+        clean["sort_by"] = None
+    clean["relative_preferences"] = [g for g in clean.get("relative_preferences") or []
+                                     if g["field"] not in removed] or None
+    old_needs = {n["attribute"]: n for n in previous.get("abstract_needs") or []}
+    changed_scores = {n["attribute"] for n in clean.get("abstract_needs") or []
+                      if n["attribute"] in old_needs and n != old_needs[n["attribute"]]}
+    clean["relative_preferences"] = [g for g in clean.get("relative_preferences") or []
+                                     if g["field"] not in changed_scores] or None
+    if clean.get("sort_by") != previous.get("sort_by") and clean.get("sort_by"):
+        clean["relative_preferences"] = None
+
+    filter_keys = [k for k in PARAM_KEYS if k not in ("semantic_query", "sort_by", "unsupported_asks")]
+    changed = bool(removed) or any(previous.get(k) != clean.get(k) for k in filter_keys)
+    if changed:
+        # 这里的描述只是检索输入,不把条件/门槛冒充房源的事实。
+        terms = [clean.get("property_type") or "property"]
+        if clean.get("description_query"):
+            terms.append(clean["description_query"])
+        if clean.get("bedrooms"):
+            terms.append(f"{clean['bedrooms']} bedrooms")
+        if clean.get("bathrooms"):
+            terms.append(f"{clean['bathrooms']} bathrooms")
+        if clean.get("suburb"):
+            terms.append("in " + clean["suburb"])
+        terms.extend(i18n.ATTRIBUTES_EN[n["attribute"]] for n in clean.get("abstract_needs") or [])
+        terms.extend(i18n.ATTRIBUTES_EN[g["field"]] for g in clean.get("relative_preferences") or []
+                     if g["field"] in _ABSTRACT_KEYS)
+        terms.extend("near " + i18n.KINDS_EN.get(n["kind"], n["kind"].replace("_", " "))
+                     for n in clean.get("amenity_needs") or [])
+        if clean.get("near_place"):
+            terms.append("near " + clean["near_place"]["name"])
+        if clean.get("school_zone"):
+            terms.append("school zone " + clean["school_zone"]["school"])
+        terms.extend(i18n.PLANNING_NEEDS_EN[k] for k in clean.get("planning_needs") or [])
+        clean["semantic_query"] = "; ".join(terms)
+    return clean
+
+
 HISTORY_TURNS = 4      # 喂给 LLM 的历史轮数。太多会稀释注意力,也费 token。
 
 
@@ -632,20 +877,22 @@ def _context_message(state: State) -> str:
         parts.append(f"前几轮对话:\n{lines}")
 
     last_params = state.get("params") or {}
-    if any(v for k, v in last_params.items() if k != "semantic_query"):
+    if last_params:
         shown = {k: v for k, v in last_params.items() if v not in (None, [], {})}
-        parts.append("上一轮的搜索条件(refine 时在此基础上改):\n  "
+        parts.append("当前生效的搜索条件(refine 时只在此基础上改;条件卡已删除的要求不能从旧对话恢复,除非用户本轮明确重新提出):\n  "
                      + json.dumps(shown, ensure_ascii=False))
 
     metrics = state.get("metrics") or []
     if metrics:
-        brief = [f"第 {i} 套 {m.get('suburb')} ${m.get('price'):,} "
-                 f"{m.get('bedrooms')}房{m.get('bathrooms')}卫"
-                 for i, m in enumerate(metrics, 1)]
+        brief = [f"第 {i} 套 {m.get('suburb')} ${m.get('price')} "
+                 f"{m.get('bedrooms')}房{m.get('bathrooms')}卫; "
+                 f"系统相对评分 {json.dumps(m.get('context_scores') or {}, ensure_ascii=False)}"
+                 for i, m in enumerate(metrics, int(state.get('batch_offset') or 0) + 1)]
         parts.append("上一轮给出的房源(about_results 指的就是这几套):\n  "
                      + "; ".join(brief))
 
     parts.append(f"用户这一句:{state['user_query']}")
+    parts.append("界面语言:English" if _en(state) else "界面语言:中文")
     return "\n\n".join(parts)
 
 
@@ -657,14 +904,30 @@ def parse_intent(state: State) -> dict:
     except Exception:
         raw = None
 
+    history = [{"role": "用户", "text": user_query}]
+    def clarify(message=None):
+        return {"intent": "clarify", "params": state.get("params") or {},
+                "refinement_base": None, "history": history,
+                "turn_notice": message or _t(state,
+                    "我还不能确定这次要修改哪项条件,已保留原条件和房源。请说明要增加、取消或调整哪项要求;相对调整需要上一轮有对应的数据。",
+                    "I kept your filters and results. Please specify which requirement to add, remove or adjust; a relative adjustment needs matching data from the previous results.")}
+
     if raw is None:
+        if _parking_kind(user_query) == "property":
+            return {"intent": "clarify", "params": state.get("params") or {},
+                    "refinement_base": None, "history": history,
+                    "turn_notice": _parking_notice(state, "property")}
+        if state.get("params") or state.get("metrics"):
+            return clarify()
         # 兜底:当成全新搜索,退化成纯语义检索。宁可搜得宽,不要崩。
         return {"intent": "new_search",
                 "params": {**{k: None for k in PARAM_KEYS}, "semantic_query": user_query},
-                "history": [{"role": "用户", "text": user_query}]}
+                "refinement_base": None, "turn_notice": None, "history": history}
 
     intent = raw.get("intent")
     if not isinstance(intent, str) or intent.strip() not in _INTENTS:
+        if state.get("params") or state.get("metrics"):
+            return clarify()
         # 分类不出来就按"新搜索"走 —— 那是唯一一条会真正去查数据库的安全路径。
         # 猜成 about_results 的话,系统会拿着上一轮的旧房源回答新问题,更糟。
         intent = "new_search"
@@ -680,18 +943,68 @@ def parse_intent(state: State) -> dict:
     if intent == "about_results" and not state.get("metrics"):
         intent = "new_search"
     if intent == "refine" and not (state.get("params") or state.get("metrics")):
-        intent = "new_search"
+        return clarify()
+
+    if intent == "clarify":
+        message = raw.get("clarification")
+        return clarify(message[:500] if isinstance(message, str) and message.strip() else None)
+
+    if intent == "new_search" and state.get("params"):
+        reset_source = raw.get("reset_source")
+        if not isinstance(reset_source, str) or not reset_source.strip() or reset_source.casefold() not in user_query.casefold():
+            return clarify()
 
     if intent in ("about_results", "concept"):
         # 这两类不重新检索,参数保持上一轮不动(供输出时交代口径用)
-        return {"intent": intent, "history": [{"role": "用户", "text": user_query}]}
+        return {"intent": intent, "params": state.get("params") or {},
+                "turn_notice": None, "refinement_base": None, "history": history}
+
+    if intent == "refine":
+        try:
+            previous = state.get("params") or {}
+            changes = raw.get("changes")
+            removed_property_parking = any(
+                isinstance(change, dict) and change.get("action") == "remove"
+                and change.get("field") == "unsupported_asks"
+                and isinstance(change.get("value"), str)
+                and change["value"].casefold() in _PROPERTY_PARKING_LABELS
+                for change in (changes if isinstance(changes, list) else []))
+            preserve_property_parking = _PROPERTY_PARKING_ASK in (previous.get("unsupported_asks") or [])
+            def sanitize_refinement(params, query):
+                return _sanitize(params, query, preserve_property_parking=preserve_property_parking,
+                                 allow_property_parking=not removed_property_parking)
+            changed = refinement.apply_changes(previous, changes,
+                user_query, state.get("metrics") or [], sanitize_refinement, _SORT_FIELDS)
+            clean = prepare_refinement(changed, previous, user_query=user_query,
+                preserve_property_parking=preserve_property_parking,
+                allow_property_parking=not removed_property_parking)
+            # 相对目标由程序计算,prepare_refinement 不能重写其基准。
+            clean["relative_preferences"] = changed.get("relative_preferences")
+        except (refinement.ClarifyChange, TypeError, ValueError, KeyError):
+            return clarify()
+        return {"intent": intent, "params": clean, "refinement_base": refinement.snapshot(state),
+                "turn_notice": None, "history": history}
 
     return {"intent": intent,
-            "params": _sanitize(raw, user_query),
-            "history": [{"role": "用户", "text": user_query}]}
+            "params": _sanitize({**raw, "relative_preferences": None}, user_query),
+            "refinement_base": None, "turn_notice": None, "history": history}
 
 
 # ---------------------------------------------------------------- 节点 2:search
+
+def detail_metrics(ids: list[int], lang: str = "zh") -> list[dict]:
+    """按房源编号直接算出与搜索结果**同一口径**的详情数据(收藏夹打开详情用)。
+
+    等同于一次「没有任何偏好条件」的检索:analyze → enrich → present,不经过 rank,不调用 LLM。
+    数字都是现在的模型与现在的假设算出来的,不是收藏时的旧值。
+    """
+    state = {"properties": properties_by_ids(ids), "params": {}, "lang": lang, "user_query": ""}
+    if not state["properties"]:
+        return []
+    for node in (analyze, enrich, present):
+        state.update(node(state))
+    return state["metrics"]
+
 
 RESULT_LIMIT = 5        # 最终给用户看几套
 
@@ -710,6 +1023,14 @@ RESULT_LIMIT = 5        # 最终给用户看几套
 CANDIDATE_LIMIT = 5000
 
 
+# 能在 SQL 里排的口径 -> search_properties(order_by=...)。cap_rate 和毛回报率同序
+# (运营支出按同一比例扣)。**ROI 不同序**:分母多了分档累进印花税和杂费,按毛回报率截的前 5,000 套
+# 可能漏掉真正的 ROI 最高者(DEF-0007),所以 ROI 单独按不取整的 ROI 预排序,
+# 并由 rank 证明/扩容(见 formulas.roi_certified_prefix 与 rank)。
+_SQL_ORDER = {"price_asc": "price_asc", "price_desc": "price_desc",
+              "gross_yield": "gross_yield", "cap_rate": "gross_yield", "roi": "roi"}
+
+
 def search(state: State) -> dict:
     """调 B 的 search_properties()。这一步没有 LLM 参与。
 
@@ -717,10 +1038,11 @@ def search(state: State) -> dict:
     Cap Rate 这些是**算出来的**,数据库里没有这些列,没法在 SQL 里排序。
     只能捞一批回来自己算、自己排。
 
-    这有个必须说清楚的代价:排出来的「回报率最高」,准确说是
-    **「语义上最相关的 120 套里回报率最高的」**,不是全库最高。
-    想要全库最高,得让检索层支持按指标排序 —— 那要改 search_properties()
-    的签名,是跨线契约,不能单方面动。这个口径在输出里会如实标注。
+    价格和回报率是例外(审计 BUG-04):它们能在 SQL 里排,就让检索层按这一列取前 N 套。
+    这样即使硬条件命中超过候选上限,截下来的也是**全库**这一列最靠前的那批,
+    后面再按设施、环境、学区筛,也不会漏掉池子外面更靠前的房源。
+    其余口径(估值差、环境属性、离某地距离)数据库里没有,仍在语义最相关的候选里挑,
+    这个限定会在排序说明里如实标出。
     """
     params = {key: state["params"].get(key) for key in SEARCH_KEYS}
     if not params.get("semantic_query"):
@@ -734,10 +1056,42 @@ def search(state: State) -> dict:
     needs_pool = any(state["params"].get(k) for k in RANK_KEYS
                      if k != "unsupported_asks")
     limit = CANDIDATE_LIMIT if needs_pool else RESULT_LIMIT
-    return {"properties": search_properties(**params, limit=limit)}
+    if state.get("roi_limit"):
+        limit = max(limit, int(state["roi_limit"]))      # rank 扩大 ROI 候选池时临时指定(不写回会话状态)
+    order_by = _SQL_ORDER.get(state["params"].get("sort_by"))
+    extra, roi_pool, snap = {}, None, state.get("assumption_snap")
+    if state.get("roi_limit") and snap:
+        pass                       # rank 扩容的后续几轮:沿用第一轮的快照,不再读进程级假设
+    else:
+        display = deepcopy(assumptions.snapshot())          # 只读一次;运营支出和杂费都直接取这一份的键(键名同 /api/recalc 与前端 live.*)。
+        snap = {"opex_rate": display["opex_rate"],          # 键缺失就直接报错,不悄悄再去读会变的进程级假设
+                "other_costs": display["other_acquisition_costs"],
+                "display": display}
+    if order_by == "roi":
+        extra = {"opex_rate": snap["opex_rate"], "other_costs": snap["other_costs"]}       # ROI 预排序与 analyze 同一份快照
+    # ROI 多取 1 套当哨兵:只有哨兵真的存在才算「被截断」(恰好取满 limit 套、后面没有了,不算截断)
+    properties = search_properties(**params, limit=limit + (1 if order_by == "roi" else 0), order_by=order_by, **extra)
+    if order_by == "roi" and len(properties) > limit:
+        properties = properties[:limit]
+        last = properties[-1]          # 池被截断:池外任何一套的不取整 ROI ≤ 最后一套的(SQL 按它排序)
+        roi_pool = {"cutoff": roi_unrounded(last.get("price"), last.get("annual_rent"), extra["opex_rate"], extra["other_costs"]),
+                    "opex_rate": extra["opex_rate"], "other_costs": extra["other_costs"], "limit": limit}
+    return {"properties": properties, "search_order": order_by, "roi_pool": roi_pool, "assumption_snap": snap}
 
 
 # ---------------------------------------------------------------- 节点 3:analyze
+
+def _rent_sources(ids) -> dict:
+    """id -> rent_source。查不到(比如测试里的假房源没有 id)就返回空,不猜。"""
+    ids = [i for i in ids if isinstance(i, int)]
+    if not ids:
+        return {}
+    from app.core.db import get_connection
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, rent_source FROM properties WHERE id = ANY(%s)", (ids,))
+        return dict(cur.fetchall())
+
 
 def analyze(state: State) -> dict:
     """对每套房调公式 + 估值模型。纯确定性计算,没有 LLM 参与。
@@ -745,13 +1099,17 @@ def analyze(state: State) -> dict:
     这一步产出的每个数字只有三种来源,没有第四种:
       A. 直接来自数据库某一列(price、annual_rent……)
       B. formulas.py 里的一个公式算出来的
-      C. valuation.py 里的模型预测的(带 typical_error_pct 说明误差)
+      C. valuation.py 里的模型预测的(带分房型的 80% 保形区间,覆盖率经留出集验证)
     其中 B 类里,NOI / Cap Rate / ROI 依赖假设,所以每一条都随身带着
     `assumptions` 字段 —— 数字走到哪,它依赖的假设就跟到哪。
     """
-    opex_rate = assumptions.opex_rate()
-    other_costs = assumptions.other_acquisition_costs()
-    assumption_snapshot = assumptions.snapshot()
+    snap = state.get("assumption_snap")
+    if snap:       # 走过 search:用本次请求的那一份快照(与 ROI 预排序一致),不再读进程级假设
+        opex_rate, other_costs, assumption_snapshot = snap["opex_rate"], snap["other_costs"], snap["display"]
+    else:          # 没经过 search(如按编号取详情):读当前进程级假设
+        opex_rate = assumptions.opex_rate()
+        other_costs = assumptions.other_acquisition_costs()
+        assumption_snapshot = assumptions.snapshot()
 
     # 估值一次算完一批。逐条调的话每套都要新建 DataFrame + 调一次模型,
     # 120 套要 2.7 秒;批量只要几十毫秒。
@@ -768,7 +1126,14 @@ def analyze(state: State) -> dict:
         "distance_cbd": p.get("distance_cbd"),
         "latitude": p.get("latitude"),
         "longitude": p.get("longitude"),
+        # 售价不是特征,模型不看它;只用来查这套库内房源的离折估值(见 crossfit_valuation.py)。
+        # 不带它,库内 80% 的房源会拿到训练集里的拟合值 —— 异常成交价会被模型原样背书。
+        "price": p.get("price"),
     } for p in state["properties"]])
+
+    # 年租金的匹配粒度(片区 / 大区 / 不分房型)。它决定这个数能说到多具体,所以必须随数字一起走。
+    # 单独查一次而不是改检索 SQL:检索的返回字段是跨线契约(见 search.py 顶部说明)。
+    rent_sources = _rent_sources([p.get("id") for p in state["properties"]])
 
     metrics = []
     for prop, valuation in zip(state["properties"], valuations):
@@ -789,6 +1154,12 @@ def analyze(state: State) -> dict:
         inv = investment_metrics(price, annual_rent, opex_rate, other_costs)
 
         predicted = valuation["predicted_price"]
+        lo, hi = valuation.get("interval_low"), valuation.get("interval_high")
+        # 售价相对模型区间的位置。below = 售价低于区间下限(模型认为明显偏便宜);
+        # within = 在区间内,**不许**说成低估或高估;above = 高于上限。
+        position = None
+        if price and lo is not None and hi is not None:
+            position = "below" if price < lo else "above" if price > hi else "within"
 
         metrics.append({
             # --- A. 直接取自数据库的列 ---
@@ -800,8 +1171,14 @@ def analyze(state: State) -> dict:
             "bedrooms": prop.get("bedrooms"),
             "bathrooms": prop.get("bathrooms"),
             "car_spaces": prop.get("car_spaces"),
-            "distance_cbd": prop.get("distance_cbd"),
+            # 按坐标算的直线距离,不是数据集的 Distance 列(那一列有 106 个区写错,见 nearby.distance_to_cbd_km)。
+            # 估值模型的输入仍是原列,在上面 predict_values 那里。
+            "distance_cbd": nearby.distance_to_cbd_km(prop.get("latitude"), prop.get("longitude"),
+                                                      prop.get("distance_cbd")),
             "annual_rent": annual_rent,
+            # 年租金**不是这套房自己的租金**,是 DFFH 公布的片区中位租金(按房型、卧室数、成交季度匹配)。
+            # 值:precinct_exact_sheet / precinct_all_properties / region_exact_sheet / region_all_properties
+            "rent_source": rent_sources.get(prop.get("id")),
             # 经纬度不展示给用户,但 enrich 节点要用它算周边设施距离
             "latitude": prop.get("latitude"),
             "longitude": prop.get("longitude"),
@@ -821,8 +1198,14 @@ def analyze(state: State) -> dict:
             # --- C. valuation.py 的模型预测 ---
             "predicted_price": predicted,
             "valuation_is_stub": valuation["is_stub"],
+            # True = 这个估值来自没见过这套房的那一折模型;False = 定稿模型(库外输入或数据被改过)
+            "valuation_cross_fitted": valuation.get("cross_fitted"),
             "valuation_error_pct": valuation.get("typical_error_pct"),
             "valuation_range": [valuation.get("range_low"), valuation.get("range_high")],
+            "valuation_interval": [lo, hi],
+            "valuation_interval_level": valuation.get("interval_level"),
+            "valuation_interval_coverage": valuation.get("interval_coverage"),
+            "valuation_position": position,
             # 估值高于售价多少(小数)。⚠️ 模型典型误差约 9%,所以只有明显超过
             # 这个量级的差距才有讨论价值,不能拿 2% 的差就说"被低估"。
             "predicted_gap": (predicted - price) / price if price and predicted else None,
@@ -848,7 +1231,7 @@ def enrich(state: State) -> dict:
     """
     params = state.get("params") or {}
     needs = params.get("amenity_needs") or []
-    want_context_kinds = (bool(params.get("abstract_needs"))
+    want_context_kinds = (bool(params.get("abstract_needs")) or bool(params.get("relative_preferences"))
                           or params.get("sort_by") in _ABSTRACT_KEYS)
     kinds = tuple(dict.fromkeys(
         [n["kind"] for n in needs]
@@ -869,7 +1252,8 @@ def enrich(state: State) -> dict:
 
     # 抽象属性(安静/热闹/便利/近公园)要不要算。它比设施距离贵一些
     # (主干道有 69,174 个采样点),所以只在用户真的提了、或要按它排序时才算。
-    want_context = bool(params.get("abstract_needs")) or params.get("sort_by") in _ABSTRACT_KEYS
+    want_context = (bool(params.get("abstract_needs")) or bool(params.get("relative_preferences"))
+                    or params.get("sort_by") in _ABSTRACT_KEYS)
 
     rows = state["metrics"]
     # 批量算环境证据。候选池放大到几千套之后,逐套算会慢一个数量级 ——
@@ -960,8 +1344,67 @@ _SORT_LABEL = {
 }
 
 
-def rank(state: State) -> dict:
-    """按用户要的指标筛选 + 排序,再截到 RESULT_LIMIT 套。没有 LLM 参与。
+def _score_shift(state, goals, needs, previous_rows, shown):
+    """「安静 中位 29→40(+11);热闹 中位 100→96」:相对调整的属性及其反向属性怎么变的。"""
+    fields = [g["field"] for g in goals if g["field"] in _ABSTRACT_KEYS]
+    held = {n["attribute"] for n in needs or []}
+    fields += [refinement.OPPOSITE[f] for f in fields if refinement.OPPOSITE.get(f) in held]
+    parts = []
+    for field in dict.fromkeys(fields):
+        before = refinement.baseline_for(previous_rows, field)
+        after = refinement.baseline_for(shown, field)
+        if before is None or after is None:
+            continue
+        diff = round(after - before)
+        parts.append(f"「{_attr_label(state, field)}」" + _t(state, "中位 ", " median ")
+                     + f"{before:.0f}→{after:.0f}({diff:+d})")
+    if not parts:
+        return None
+    # 排序说明整体用 ";" 分条,这里不能再用 ";",否则一行会被拆成两条
+    return _t(state, "评分变化(系统相对评分):", "Score change (system relative scores): ") + _t(state, ",", ", ").join(parts)
+
+
+def _tradeoff_hint(state, params, goals):
+    """相对调整走不下去时,说明卡在哪一个反向门槛上,以及它能不能自动让。"""
+    moving = {refinement.OPPOSITE.get(g["field"]) for g in goals}
+    for need in params.get("abstract_needs") or []:
+        if need["attribute"] not in moving:
+            continue
+        label, floor = _attr_label(state, need["attribute"]), need["min_score"]
+        if need.get("value_source") == "explicit" or need.get("strength") == "required":
+            return _t(state,
+                f"「{label}」≥{floor} 是你明确要求的,系统不会自动降低。如果愿意放宽,请在条件卡里修改或直接告诉我。",
+                f"“{label}” ≥{floor} is your explicit requirement, so it will not be lowered automatically. "
+                f"Edit it on the filter card or tell me if you want to relax it.")
+        if floor > refinement.AUTO_FLOOR:
+            return None                                # 还能自动让,不需要打扰用户
+        return _t(state,
+            f"再往下调需要把「{label}」门槛降到 {refinement.AUTO_FLOOR} 以下,那样就称不上{label}了,需要你确认。"
+            f"也可以在条件卡里直接修改分数。",
+            f"Going further would take the “{label}” threshold below {refinement.AUTO_FLOOR}, which no longer "
+            f"counts as {label.lower()}. Please confirm, or edit the score on the filter card.")
+    return None
+
+
+def _unmatched_refinement(state, notes, relative=False, hint=None):
+    message = _t(state,
+        "本次检索范围内,没有找到满足现有条件且能适度向该方向调整的房源。" if relative else
+        "本次检索范围内,没有找到同时满足这些条件的房源。",
+        "No candidates in this search can make a moderate adjustment while meeting your filters." if relative else
+        "No candidates in this search meet all these requirements together.")
+    if hint:
+        message += hint
+    base = state.get("refinement_base")
+    if base and base.get("metrics"):
+        message += _t(state, "已保留上一轮条件和房源。请明确希望放宽哪项要求,或保留当前结果。",
+                      " Your previous filters and results are unchanged. Specify a requirement to relax, or keep the current results.")
+        return {**base, "turn_notice": message, "refinement_base": None}
+    return {"metrics": [], "more": [], "batch_offset": 0,
+            "ranking": ";".join([message] + notes), "turn_notice": None, "refinement_base": None}
+
+
+def _rank_once(state: State) -> dict:
+    """按用户要的指标筛选 + 排序,再截到 RESULT_LIMIT 套。没有 LLM 参与。(一次;ROI 候选池扩容见下面的 rank)
 
     为什么单独一个节点、不塞进 analyze:取数、算数、挑选是三件事。
     分开之后,「换个排序口径」不需要碰计算逻辑,「改公式」不需要碰挑选逻辑。
@@ -972,6 +1415,35 @@ def rank(state: State) -> dict:
     sort_by = params.get("sort_by")
     floor = params.get("min_gross_yield")
     notes = []
+    roi_unproven = False       # ROI 候选池被截断、且前几名没能证明不会被池外超过 -> 交给 rank 扩大候选池再来一次
+    roi_pool_cut = state.get("search_order") == "roi" and bool(state.get("roi_pool"))   # ROI 候选池真的被截断(池外还有房源)
+
+    def _expansion_futile() -> bool:
+        """筛选条件本身不可能满足(学区没解析出来、指定地点没找到)时,扩大候选池没有意义,不扩。"""
+        zone_req = params.get("school_zone")
+        if zone_req and not (state.get("zone_lookup") or {}).get("found"):
+            return True
+        place = params.get("near_place")
+        if place and place.get("max_distance_m"):
+            lookup = state.get("place_lookup") or {}
+            if lookup.get("error") or not lookup.get("found"):
+                return True
+        return False
+
+    def _no_match(*args, **kwargs):
+        """后置筛选(收益门槛/设施/学区/规划/指定地点/相对目标)把候选池筛空了。池被截断时,空不等于「没有」:
+        让 rank 把候选池翻倍重试(roi_unproven 之前就提前返回,是 R07B-01 的根因);条件本身不可能满足就不扩。
+        扩到上限仍为空,说明里如实写明候选只是 ROI 预排序的前 N 套。"""
+        retry = roi_pool_cut and not _expansion_futile()
+        if retry:
+            cap_note = _t(state, f"候选池是按投资回报率预排序的前 {len(state['metrics'])} 套(已达扩容上限),池外可能还有符合条件的房源",
+                          f"The candidate pool is the top {len(state['metrics'])} properties pre-sorted by ROI (expansion cap reached); "
+                          f"properties outside it may still match")
+            args[1].append(cap_note)
+        out = _unmatched_refinement(*args, **kwargs)
+        if retry and out.get("turn_notice"):
+            out["turn_notice"] += " " + cap_note   # 恢复旧结果时 ranking 属于旧轮;本轮的候选上限通过确定性 notice 交代。
+        return {**out, "_roi_unproven": True} if retry else out
 
     # 地名被改过就必须说。静默纠错的危险不在纠错本身,而在于纠错纠偏了也没人知道 ——
     # 用户看着一屏"Richmond 的房子",却以为自己搜的是别的地方。
@@ -988,6 +1460,32 @@ def rank(state: State) -> dict:
                         "No data for these, so they were not used as filters: ")
                      + _unsupported_list(state, params["unsupported_asks"]))
 
+    # 按回报率挑房之前,先剔掉**售价远低于模型估值**的成交。
+    #
+    # 起因(审计 BUG-02):「80 万以内回报率最高」第一名是 Footscray 一套卖 $85,000 的公寓(15.9%),
+    # 全库真正的第一是 Caulfield 一栋 4 房独栋卖 $131,000(32%),同区其他独栋都在百万以上。
+    # 回报率 = 片区中位租金 ÷ 售价,售价一异常回报率就跟着异常,而按回报率排序取的正是最极端的那头。
+    # 判据和下面估值差排序同一把尺子:售价比估值低出该房型典型误差 3 倍以上的,多半是数据异常。
+    # 只剔「低得离谱」的一侧 —— 售价偏高只会让回报率变低,不会被顶到前面。
+    if sort_by in ("gross_yield", "cap_rate", "roi") or floor is not None:
+        def _price_suspect(m):
+            gap = m.get("predicted_gap")
+            return gap is not None and gap > 3 * (m.get("valuation_error_pct") or 0.10)
+        suspect = sum(1 for m in metrics if _price_suspect(m))
+        if suspect and suspect < len(metrics):
+            metrics = [m for m in metrics if not _price_suspect(m)]
+            notes.append(_t(state,
+                f"已剔除 {suspect} 套售价远低于模型估值的(低出该房型典型误差 3 倍以上,多半是数据异常,"
+                f"回报率会被虚高)",
+                f"Dropped {suspect} properties priced far below the model estimate (over 3× the typical error "
+                f"for the type — usually bad data, which would inflate the yield)"))
+        elif suspect:
+            # 全部候选都「售价远低于估值」:没有可剔除的对照,但回报率同样可能虚高 —— 不能不吭声
+            notes.append(_t(state,
+                f"注意:候选全部售价远低于模型估值(低出该房型典型误差 3 倍以上),未剔除,回报率可能虚高",
+                f"Note: every candidate is priced far below the model estimate (over 3× the typical error for the "
+                f"type); none were dropped, so the yields may be inflated"))
+
     if floor is not None:
         kept = [m for m in metrics if m.get("gross_yield") is not None and m["gross_yield"] >= floor]
         if kept:
@@ -995,115 +1493,134 @@ def rank(state: State) -> dict:
             notes.append(_t(state, f"已筛掉毛租金回报率低于 {floor * 100:.1f}% 的",
                             f"Filtered out gross yields below {floor * 100:.1f}%"))
         else:
-            # 一条都不剩时不硬筛 —— 宁可给结果并说明门槛没达到,也不要让用户
-            # 面对一个空列表却不知道是没房源还是门槛太高。
-            notes.append(_t(state,
-                f"注意:候选里没有一套达到 {floor * 100:.1f}% 的回报率门槛,已忽略该门槛",
-                f"Note: no candidate reaches the {floor * 100:.1f}% yield threshold, so it was ignored"))
+            metrics = []
+            notes.append(_t(state, f"没有候选达到毛回报率 {floor * 100:.1f}% 的要求",
+                            f"No candidate meets the gross yield requirement of {floor * 100:.1f}%"))
 
-    # --- V3:按设施距离筛 ---
+    # 所有已生效的条件一起求交集。没有交集就是没有兼容结果,
+    # 不能按列表先后顺序放弃后面的条件。
+    def keep(predicate, zh, en):
+        nonlocal metrics
+        metrics = [m for m in metrics if predicate(m)]
+        notes.append(_t(state, zh, en))
+
     for need in params.get("amenity_needs") or []:
         kind, limit = need["kind"], need["max_distance_m"]
-        zh = _kind_label(state, kind)
-        kept = [m for m in metrics
-                if (m.get("amenities") or {}).get(kind, {}).get("distance_m") is not None
-                and m["amenities"][kind]["distance_m"] <= limit]
-        if kept:
-            metrics = kept
-            notes.append(_t(state, f"已筛出距{zh} {limit} 米内的",
-                            f"Kept only properties within {limit} m of the nearest {zh.lower()}"))
-        else:
-            # 同上:门槛太严时如实说明,而不是给一个空列表让用户猜原因。
-            # 顺带把"最近的那个有多远"报出来,用户才知道该放宽到多少。
-            distances = [m["amenities"][kind]["distance_m"] for m in metrics
-                         if (m.get("amenities") or {}).get(kind, {}).get("distance_m") is not None]
-            closest = (_t(state, f",最近的也有 {min(distances)} 米",
-                          f"; the nearest is {min(distances)} m away") if distances else "")
-            notes.append(_t(state,
-                f"注意:候选里没有一套距{zh}在 {limit} 米内{closest},已忽略该条件",
-                f"Note: no candidate is within {limit} m of the nearest {zh.lower()}{closest} — condition ignored"))
+        label = _kind_label(state, kind)
+        keep(lambda m: (m.get("amenities") or {}).get(kind, {}).get("distance_m") is not None
+             and m["amenities"][kind]["distance_m"] <= limit,
+             f"要求距{label} {limit} 米内", f"Required: nearest {label.lower()} within {limit} m")
 
-    # --- V4:按环境属性筛(安静/热闹/便利/近公园)---
-    if params.get("_conflict"):
-        zh = _attr_label(state, params["_conflict"])
-        notes.append(_t(state,
-            f"注意:「安静」和「热闹」是互斥的(实测相关系数 −0.80),已忽略「{zh}」",
-            f"Note: “quiet” and “lively” are mutually exclusive (measured correlation −0.80); “{zh}” was ignored"))
+    goals = params.get("relative_preferences") or []
+    # 相对调整一项(如「再安静一点」)时,反向属性(热闹)的系统推断门槛可以小步让出。
+    # 候选先按让出后的门槛取,排序时优先原门槛内的房子,凑不够才真正让出并告知用户。
+    relax = refinement.relaxable_need(params.get("abstract_needs"), goals) if goals else None
+
+    def meets(m, need, floor):
+        _, compare = _SCORE_OPERATORS.get(need.get("operator", "gte"), _SCORE_OPERATORS["gte"])
+        value = (m.get("context_scores") or {}).get(need["attribute"])
+        return value is not None and compare(value, floor)
+
     for need in params.get("abstract_needs") or []:
         attr, floor = need["attribute"], need["min_score"]
-        zh = _attr_label(state, attr)
-        kept = [m for m in metrics
-                if (m.get("context_scores") or {}).get(attr) is not None
-                and m["context_scores"][attr] >= floor]
-        if kept:
-            metrics = kept
-            notes.append(_t(state, f"已筛出「{zh}」评分 ≥ {floor} 的",
-                            f"Kept only “{zh}” scores of {floor} or above"))
-        else:
-            best = [m["context_scores"][attr] for m in metrics
-                    if (m.get("context_scores") or {}).get(attr) is not None]
-            hint = (_t(state, f",候选里最高只有 {max(best)}",
-                       f"; the highest among the candidates is {max(best)}") if best else "")
-            notes.append(_t(state,
-                f"注意:候选里没有一套「{zh}」评分达到 {floor}{hint},已忽略该条件",
-                f"Note: no candidate reaches a “{zh}” score of {floor}{hint} — condition ignored"))
+        symbol, compare = _SCORE_OPERATORS.get(need.get("operator", "gte"), _SCORE_OPERATORS["gte"])
+        label = _attr_label(state, attr)
+        if need is relax:
+            loose = refinement.relaxed_floor(need)
+            metrics = [m for m in metrics if meets(m, need, loose)]
+            continue                                   # 说明文字在确定是否让步之后再写
+        keep(lambda m: (m.get("context_scores") or {}).get(attr) is not None
+             and compare(m["context_scores"][attr], floor),
+             f"已筛出「{label}」评分 {symbol} {floor} 的",
+             f"Kept only “{label}” scores {symbol} {floor}")
 
     zone_req = params.get("school_zone")
-    if zone_req and (state.get("zone_lookup") or {}).get("found"):
-        kept = [m for m in metrics if m.get("in_requested_zone")]
-        level = zone_req.get("level") or ""
-        level_zh = zones.LEVEL_ZH.get(level, "")
-        level_en = {"primary": "primary", "secondary": "secondary"}.get(level, "")
-        if kept:
-            metrics = kept
-            notes.append(_t(state,
-                f"已筛出在「{zone_req['school']}」{level_zh}学区内的",
-                f"Kept only properties inside the {level_en} school zone of “{zone_req['school']}”".replace("  ", " ")))
-        else:
-            notes.append(_t(state,
-                f"注意:候选里没有一套落在「{zone_req['school']}」学区内,已忽略该条件",
-                f"Note: no candidate falls inside the “{zone_req['school']}” school zone — condition ignored"))
-    elif zone_req:
-        err = (state.get("zone_lookup") or {}).get("error")
-        notes.append(_t(state, f"注意:{err or '学区未解析'}",
-                        f"Note: {err or 'the school zone could not be resolved'}"))
+    if zone_req:
+        found = (state.get("zone_lookup") or {}).get("found")
+        keep(lambda m: bool(found) and bool(m.get("in_requested_zone")),
+             f"要求在「{zone_req['school']}」学区内",
+             f"Required: inside the school zone of {zone_req['school']}")
+        if not found:
+            notes.append(_t(state, "未能解析指定学区,没有将它替换成其他学区",
+                            "The requested school zone could not be resolved; no substitute was used"))
 
-    # --- V7:按规划分区筛 ---
     for need in params.get("planning_needs") or []:
-        zh, predicate = _PLANNING_NEEDS[need]
-        if _en(state):
-            zh = i18n.PLANNING_NEEDS_EN.get(need, zh)
-        kept = [m for m in metrics if predicate(m.get("planning") or {})]
-        if kept:
-            metrics = kept
-            notes.append(_t(state, f"已筛出{zh}的", f"Kept only properties with {zh}"))
-        else:
-            # 和其它筛选同一条规矩:筛空了不硬筛,如实说明。
-            # 这里尤其重要 —— "查不到分区数据"和"不满足条件"是两回事,
-            # 而两者在这一步都会被筛掉,所以要把没数据的套数单独报出来。
-            missing = sum(1 for m in metrics if not (m.get("planning") or {}).get("zone"))
-            hint = (_t(state, f"(其中 {missing} 套查不到分区数据)",
-                       f" ({missing} of them have no zoning data)") if missing else "")
-            notes.append(_t(state,
-                f"注意:候选里没有一套满足「{zh}」{hint},已忽略该条件",
-                f"Note: no candidate satisfies “{zh}”{hint} — condition ignored"))
+        label, predicate = _PLANNING_NEEDS[need]
+        keep(lambda m: predicate(m.get("planning") or {}), f"要求{label}",
+             f"Required: {i18n.PLANNING_NEEDS_EN.get(need, label)}")
 
     place = params.get("near_place")
     if place and place.get("max_distance_m"):
         limit = place["max_distance_m"]
-        kept = [m for m in metrics
-                if m.get("near_place") and m["near_place"]["distance_m"] <= limit]
-        if kept:
-            metrics = kept
-            notes.append(_t(state, f"已筛出距「{place['name']}」{limit} 米内的",
-                            f"Kept only properties within {limit} m of “{place['name']}”"))
+        keep(lambda m: (m.get("near_place") or {}).get("distance_m") is not None
+             and m["near_place"]["distance_m"] <= limit,
+             f"要求距「{place['name']}」在 {limit} 米内",
+             f"Required: within {limit} m of {place['name']}")
+
+    if not metrics:
+        return _no_match(state, notes)
+
+    if goals:
+        base = state.get("refinement_base") or {}
+        previous_rows = base.get("metrics") or []
+        needs = params.get("abstract_needs")
+        new_params, adjust = None, []           # adjust:这次调整付出的代价,排在说明最前面
+        if relax:
+            label, floor = _attr_label(state, relax["attribute"]), relax["min_score"]
+            loose = refinement.relaxed_floor(relax)
+            strict = [m for m in metrics if meets(m, relax, floor)]
+            ranked = refinement.relative_rank(strict, goals, previous_rows, needs)
+            if len(ranked) < RESULT_LIMIT:
+                wide = refinement.relative_rank(metrics, goals, previous_rows, needs)
+                if len(wide) > len(ranked):
+                    ranked, floor = wide, loose
+                    new_params = deepcopy(params)
+                    for need in new_params["abstract_needs"]:
+                        if need["attribute"] == relax["attribute"]:
+                            need["min_score"] = loose
+                    adjust.append(_t(state,
+                        f"为了继续调整,「{label}」门槛已从 ≥{relax['min_score']} 放宽到 ≥{loose}。"
+                        f"这个门槛是系统根据你的描述推断的,不是你设定的分数。「{label}」要求仍然保留。",
+                        f"To keep adjusting, the “{label}” threshold was relaxed from ≥{relax['min_score']} to ≥{loose}. "
+                        f"That threshold was inferred from your wording, not a score you set. The “{label}” requirement is kept."))
+            notes.append(_t(state, f"已筛出「{label}」评分 ≥ {floor} 的", f"Kept only “{label}” scores ≥ {floor}"))
         else:
-            distances = [m["near_place"]["distance_m"] for m in metrics if m.get("near_place")]
-            closest = (_t(state, f",最近的也有 {min(distances)} 米",
-                          f"; the nearest is {min(distances)} m away") if distances else "")
-            notes.append(_t(state,
-                f"注意:候选里没有一套距「{place['name']}」在 {limit} 米内{closest},已忽略该条件",
-                f"Note: no candidate is within {limit} m of “{place['name']}”{closest} — condition ignored"))
+            ranked = refinement.relative_rank(metrics, goals, previous_rows, needs)
+        metrics = ranked
+        if not metrics:
+            return _no_match(state, notes, relative=True, hint=_tradeoff_hint(state, params, goals))
+        labels = [_attr_label(state, g["field"]) if g["field"] in _ABSTRACT_KEYS
+                  else ({"price": "价格", "near_place_distance": "到指定地点的距离"}.get(g["field"], g["field"])
+                        if not _en(state) else g["field"].replace("_", " ")) for g in goals]
+        notes.append(_t(state, "保留原条件,相对上一轮适度调整:" + "、".join(labels),
+                        "Original filters retained; adjusted relative to the previous results: " + ", ".join(labels)))
+        shift = _score_shift(state, goals, needs, previous_rows, metrics[:RESULT_LIMIT])
+        if shift:
+            notes.append(shift)
+        notes.append(_t(state, "调整幅度由候选分布计算,不是用户指定的分数门槛",
+                        "The adjustment uses the candidate distribution, not a user-specified score threshold"))
+        if state.get("search_order") == "roi":
+            # 候选实际来自 ROI 预排序,不是语义相关度;相对目标是在这批候选里重排的,不给「已验证」之类的保证
+            if roi_pool_cut:
+                notes.append(_t(state, f"比较范围为按投资回报率预排序的前 {len(state['metrics'])} 套候选,并非全库,符合条件的可能更多",
+                                f"Compared within the top {len(state['metrics'])} candidates pre-sorted by ROI, not the whole dataset; more may match"))
+            else:
+                notes.append(_t(state, f"比较范围为符合条件的全部 {len(state['metrics'])} 套",
+                                f"Compared within all {len(state['metrics'])} matching properties"))
+        elif len(state["metrics"]) >= CANDIDATE_LIMIT:
+            notes.append(_t(state, f"比较范围为语义相关的 {CANDIDATE_LIMIT} 套候选,并非全库",
+                            f"Compared within {CANDIDATE_LIMIT} semantically relevant candidates, not the whole dataset"))
+        if len(metrics) < RESULT_LIMIT:
+            # 不悄悄缩成一两套:说清楚只剩几套、再往下调要付出什么。
+            sparse = _t(state, f"只有 {len(metrics)} 套能在保留现有条件的同时完成这次调整。",
+                        f"Only {len(metrics)} listing(s) can make this adjustment while keeping your filters.")
+            adjust += [sparse] + [x for x in [_tradeoff_hint(state, new_params or params, goals)] if x]
+        out = {"metrics": metrics[:RESULT_LIMIT], "more": metrics[:RESULT_LIMIT * 4],
+               "batch_offset": 0, "ranking": ";".join(adjust + notes), "turn_notice": None,
+               "refinement_base": None}
+        if new_params:
+            out["params"] = new_params
+        return out
 
     # 按估值差排序之前,先把**模型没有分辨力的那一段**剔掉。
     #
@@ -1126,12 +1643,27 @@ def rank(state: State) -> dict:
         dropped = len(metrics) - len(kept)
         if kept:
             metrics = kept
+            # 排在前面不等于真便宜:只有售价落到模型 80% 区间之外的,差距才超出了模型自身的不确定性。
+            # 把这个数说出来,用户才知道"前 5 名"里有几套是真信号、几套只是区间内的正常波动。
+            side = "below" if sort_by == "predicted_gap" else "above"
+            outside = sum(1 for m in kept if m.get("valuation_position") == side)
+            level = next((m.get("valuation_interval_level") for m in kept if m.get("valuation_interval_level")), None)
             if dropped:
                 notes.append(_t(state,
                     f"已剔除 {dropped} 套估值差超出模型分辨力的"
                     f"(超过该房型典型误差 3 倍,多半是数据异常而非捡漏)",
                     f"Dropped {dropped} properties whose valuation gap exceeds what the model can "
                     f"resolve (over 3× the typical error for the type — usually bad data, not a bargain)"))
+            if level:
+                # 一句话说完,不用分号:前端按分号把备注拆成多行
+                below = side == "below"
+                notes.append(_t(state,
+                    f"{'剔除后剩下的' if dropped else '符合条件的'} {len(kept)} 套里,只有 {outside} 套售价{'低于' if below else '高于'}模型 "
+                    f"{level:.0%} 把握区间{'下限' if below else '上限'},其余差距都在区间内,"
+                    f"属于正常波动,不能算{'便宜' if below else '贵'}",
+                    f"Of the {'remaining' if dropped else 'matching'} {len(kept)}, only {outside} are priced {'below' if below else 'above'} the "
+                    f"model's {level:.0%} interval — the rest are within it, which is normal variation, "
+                    f"not a real {'bargain' if below else 'premium'}"))
         else:
             notes.append(_t(state,
                 "注意:候选里每一套的估值差都超出模型分辨力,排序结果不可当作捡漏依据",
@@ -1139,10 +1671,11 @@ def rank(state: State) -> dict:
                 "this ranking is not evidence of a bargain"))
 
     if sort_by:
+        # 价格 ≤ 0 是「价格不可用」(和 formulas.stamp_duty_vic 同一口径),不是「最便宜」:不参与价格排序
         if sort_by == "price_asc":
-            key, reverse = (lambda m: m.get("price")), False
+            key, reverse = (lambda m: m.get("price") if (m.get("price") or 0) > 0 else None), False
         elif sort_by == "price_desc":
-            key, reverse = (lambda m: m.get("price")), True
+            key, reverse = (lambda m: m.get("price") if (m.get("price") or 0) > 0 else None), True
         elif sort_by == "predicted_gap_neg":
             # 估值低于售价的幅度从大到小 = predicted_gap 越负越靠前
             key, reverse = (lambda m: m.get("predicted_gap")), False
@@ -1158,12 +1691,43 @@ def rank(state: State) -> dict:
             metrics = sorted(usable, key=key, reverse=reverse)
             pool = len(state["metrics"])
             # 口径要说准:候选池没被上限截断时,这就是**全部**符合硬条件的房源,
-            # 排序结果是真的"最";被截断了就得说清楚只是前 N 套里的最。
-            scope = _t(state,
-                (f"在符合条件的全部 {pool} 套里挑" if pool < CANDIDATE_LIMIT
-                 else f"在语义最相关的 {pool} 套候选里挑,符合条件的可能更多"),
-                (f"chosen from all {pool} matching properties" if pool < CANDIDATE_LIMIT
-                 else f"chosen from the {pool} most semantically relevant candidates; more may match"))
+            # 排序结果是真的"最";被截断了就得说清楚只是前 N 套里的最 ——
+            # 除非检索层本来就是按这个口径取的候选,那截下来的就是全库最靠前的那批。
+            sql_ordered = state.get("search_order") and _SQL_ORDER.get(sort_by) == state.get("search_order")
+            roi_complete = sort_by == "roi" and sql_ordered and not state.get("roi_pool")      # ROI 池没被截断(含扩容到取完)
+            if pool < CANDIDATE_LIMIT or roi_complete:
+                scope = _t(state, f"在符合条件的全部 {pool} 套里挑", f"chosen from all {pool} matching properties")
+            elif sort_by == "roi" and sql_ordered:
+                # 候选池按不取整 ROI 预排序,最终按 Python 取整后的 ROI 排。只有「证明得了」的前几名才说精确,
+                # 其余如实披露;绝不说全库(roi_certified_prefix 的证明只覆盖池外房源不可能超过这几名)。
+                roi_pool = state.get("roi_pool") or {}
+                # 证明的前提:这批指标的 ROI 必须是用预排序同一份假设算的(R07B-02)。用 roi_pool 里的假设重算前 20 名核对;
+                # 不一致(进程级假设中途被改、或有路径没用请求快照)就撤回「已验证」,也不扩容(扩容改变不了假设)。
+                head = metrics[:RESULT_LIMIT * 4]
+                consistent = (roi_pool.get("opex_rate") is not None and roi_pool.get("other_costs") is not None and
+                              all(investment_metrics(m.get("price"), m.get("annual_rent"), roi_pool["opex_rate"], roi_pool["other_costs"])["roi"] == m.get("roi")
+                                  for m in head))
+                proven = (roi_certified_prefix([m.get("roi") for m in metrics], roi_pool.get("cutoff"), roi_pool.get("other_costs"))
+                          if consistent else 0)
+                shown = min(proven, RESULT_LIMIT * 4)
+                roi_unproven = consistent and shown < RESULT_LIMIT * 4          # 要证明的是「换一批」能翻到的前 20 名,不只是展示的 5 套
+                if not consistent:
+                    scope = _t(state, f"在按投资回报率预排序的前 {pool} 套候选里挑;预排序与计算所用的假设不一致,未做验证,符合条件的可能更多",
+                               f"chosen from the top {pool} candidates pre-sorted by ROI; the assumptions used for the pre-sort and for the "
+                               f"calculation differ, so nothing is verified and more may match")
+                elif shown >= RESULT_LIMIT:
+                    scope = _t(state, f"在按投资回报率预排序的前 {pool} 套候选里挑;已验证前 {shown} 名不会被候选池外的房源超过",
+                               f"chosen from the top {pool} candidates pre-sorted by ROI; the top {shown} are verified "
+                               f"not to be beatable by any property outside the pool")
+                else:
+                    scope = _t(state, f"在按投资回报率预排序的前 {pool} 套候选里挑;未能验证候选池外没有更高者,符合条件的可能更多",
+                               f"chosen from the top {pool} candidates pre-sorted by ROI; it could not be verified that nothing "
+                               f"outside the pool ranks higher, so more may match")
+            elif sql_ordered:
+                scope = _t(state, "在全库符合条件的房源里挑", "chosen from every matching property")
+            else:
+                scope = _t(state, f"在语义最相关的 {pool} 套候选里挑,符合条件的可能更多",
+                           f"chosen from the {pool} most semantically relevant candidates; more may match")
             label = _sort_label(state, sort_by)
             notes.append(_t(state, f"按{label}排序({scope})",
                             f"Sorted by: {label} ({scope})"))
@@ -1181,7 +1745,37 @@ def rank(state: State) -> dict:
     return {"metrics": metrics[:RESULT_LIMIT],
             "more": metrics[:RESULT_LIMIT * 4],
             "batch_offset": 0,
-            "ranking": ";".join(notes)}
+            "ranking": ";".join(notes), "turn_notice": None, "refinement_base": None,
+            **({"_roi_unproven": True} if roi_unproven else {})}
+
+
+# ROI 候选池扩容上限(套)。到这个数还没证明就停下,如实披露(见 _rank_once),不无限扩下去。
+ROI_EXPAND_CAP = CANDIDATE_LIMIT * 8
+
+
+def rank(state: State) -> dict:
+    """排序节点。ROI 排序时,候选池只是「按不取整 ROI 预排序的前 N 套」:若前 20 名证明不了不会被池外房源超过,
+    就在**同一组硬条件**下把候选池翻倍重取、重算(analyze/enrich,最终仍用 formulas.investment_metrics 的取整 ROI),
+    再排一次;直到前 20 名都被证明、或候选池取完(此时就是全部符合条件的房源)、或到 ROI_EXPAND_CAP 为止。
+    杂费 ≤ 0.5 时证明不了(roi_certified_prefix 返回 0),因此会一路扩到取完。
+    循环放在这个节点**里面**而不是图上加回边:server 会把每个节点的输出当成一次结果推给前端,回边会让用户先看到一轮半成品。"""
+    current = dict(state)
+    out = _rank_once(current)
+    extra, expanded = {}, False
+    while out.pop("_roi_unproven", False):
+        nxt = (current.get("roi_pool") or {}).get("limit", CANDIDATE_LIMIT) * 2
+        if nxt > ROI_EXPAND_CAP:
+            break                                    # 到上限:保留本轮结果,说明里已如实披露未验证
+        current.update(search({**current, "roi_limit": nxt}))
+        current.update(analyze(current))
+        enriched = enrich(current)
+        current.update(enriched)
+        extra = {k: v for k, v in enriched.items() if k != "metrics"}
+        expanded = True
+        out = _rank_once(current)
+    if expanded:     # 下游(present/explain)要看到的是最后一轮的候选池、检索口径和 roi_pool
+        extra.update(properties=current["properties"], search_order=current["search_order"], roi_pool=current["roi_pool"])
+    return {**extra, **out}
 
 
 # ---------------------------------------------------------------- 节点 5:present
@@ -1196,6 +1790,8 @@ def present(state: State) -> dict:
 
     取数、算数、挑选、展示,四件事四个节点。
     """
+    if state.get("turn_notice"):
+        return {"metrics": state.get("metrics") or []}
     metrics = state.get("metrics") or []
     if not metrics:
         return {}
@@ -1241,27 +1837,42 @@ _EXPLAIN_SYSTEM = """你是房产投资助手。下面会给你一份已经算�
    不要自己算平均值、总价、月租、差额、涨幅 —— 一个都不要算。
 2. 某个指标的值是 null,就说"数据不足,暂无法计算",不要跳过、更不要编。
 3. **数字分三类,措辞必须不同,这是本系统最重要的一条规则:**
-   - price / annual_rent / bedrooms 等:来自真实成交记录,可以直接陈述。
-   - gross_yield(毛租金回报率):由真实租金 ÷ 真实房价算出,也可以直接陈述。
+   - price / bedrooms 等:来自真实成交记录,可以直接陈述。
+   - **annual_rent 不是这套房自己的租金**,是一个参考值(周租金基准×52,或推算值),来源看 rent_source。
+     提到它必须按 rent_source 区分说法,不许说成"这套房年租金 X":
+       · precinct_exact_sheet:"按片区同户型周租金中位数算,年租约 X"
+       · precinct_all_properties:"按片区全部房型周租金中位数算"(没有匹配到同户型基准,要点明)
+       · region_exact_sheet / region_all_properties:大区基准,是各片区周租金中位数按租赁保证金登记数加权平均,
+         **不是大区整体中位数**,也不是这个片区的租金;要点明片区没有匹配到基准
+       · assumed_yield:**不是租金基准**,是成交价×假设回报率推算出来的,不许说成官方/DFFH 公布的租金,
+         也不许说"该地区没有租金数据"(只是本次查表没匹配到基准),要点明这是推算值
+       · rent_source 为 null 或其他值:只说"租金来源不明",不要猜是哪一种
+   - gross_yield(毛租金回报率):annual_rent ÷ 这套房的成交价,是**该参考租金水平下的估计**
+     (assumed_yield 时是假设值,不是市场信息),可以直接报数,但不要说成这套房实际能收到的回报。
+   - 排序口径里的"全部 N 套"指**符合本次条件的** N 套,不是全库,不要写成"全库 N 套"。
    - **noi / cap_rate / roi:建立在假设之上。** 提到它们时必须点明所依据的假设
      (assumptions 字段里有,用户消息里也会给你人话版)。例如:
      "按运营支出占租金 28% 的行业惯例假设测算,净营运收入约 X"。
      绝不能像陈述事实那样说"这套房的 NOI 是 X"。
-   - **predicted_price:模型预测值,不是成交价。** 提到它必须带上典型误差
-     (valuation_error_pct,约 9%)。
+   - **predicted_price:模型预测值,不是成交价。** 提到它必须带上 80% 把握区间
+     (valuation_interval,在模型没见过的成交上验证过覆盖率)。
 4. **环境属性(安静/热闹/生活便利/近公园)是 0~100 的相对评分,不是实测量。**
    数据里给了 context_scores(分数)和 context_evidence(算它用的原始证据)。
    提到分数时**必须同时给出至少一条证据**,例如:
-     「安静度 82 分 —— 距最近主干道 640 米、周边 300 米内没有夜间营业场所」
+     「安静度 82 分 —— 距最近主干道 640 米、周边 300 米内没有酒吧夜店」
    只报分数不给证据是不允许的:分数是我们定的一套加权口径,证据才是可核对的事实。
    分数的含义是**在全库中的相对位置**(82 分 ≈ 比 82% 的房源安静),
    不要说成"绝对很安静"。
-5. **关于"低估/高估"要格外克制。** predicted_gap 是估值高出售价的比例。
-   模型自身典型误差约 9%,所以:
-   - |predicted_gap| 小于 10%:属于误差范围内,**不许**说低估或高估,
+5. **关于"低估/高估"要格外克制。** 判断一律看 valuation_position,不看 predicted_gap 的大小:
+   - within:售价在模型 80% 把握区间内,**不许**说低估或高估,
      应该说"估值与售价基本相符"。
-   - 超过 10% 才可以谨慎提一句"估值明显高于/低于售价,但这只是模型意见,
-     可能反映了模型没看到的因素(如房况、装修、朝向)"。
+   - below:**售价低于**区间下限 = **估值高于售价**(模型认为这套偏便宜)。只能这样写:
+     "估值明显高于售价"。
+   - above:**售价高于**区间上限 = **估值低于售价**(模型认为这套偏贵)。只能这样写:
+     "估值明显低于售价"。
+     两种情况都要接一句"这只是模型意见,可能反映了模型没看到的因素(如房况、装修、朝向),
+     差距特别大时也可能是成交记录本身有误"。**方向不许写反** —— 实测出过把 below 写成
+     "估值远低于售价"的错,和卡片上的「估值高于售价」正好相反。
 6. **规划分区(planning)是法条,不是评分,也不是预测。** 数据里的 zone 是这块地
    法律上的用途分区,overlays 是压在它上面的额外限制,nearby 是周边分区构成。
    - 可以像陈述事实一样说:"分区 NRZ1(邻里住宅区,限制加密)"、
@@ -1369,7 +1980,7 @@ def _no_result_answer(params: dict, en: bool = False) -> str:
             "如果本来就想找别的区,改一下再试。")
     if params.get("unsupported_asks"):
         if en:
-            joined = ", ".join(i18n.UNSUPPORTED_KEY_EN.get(a, a) for a in params["unsupported_asks"])
+            joined = ", ".join(_unsupported_en(a) for a in params["unsupported_asks"])
             lines.append("Also, there is no data for these, so they **never entered the filtering "
                          "at all**: " + joined + ".")
         else:
@@ -1421,6 +2032,26 @@ _CONCEPT_SYSTEM = """你是房产投资助手。用户问的是一个**概念/�
 不要凭空回答。"""
 
 
+def _assumption_lines(state, metrics) -> list[str]:
+    """交给 LLM 的「本次测算所依据的假设」必须是这批指标**当时用的**那一份(每套指标自带的 assumptions,
+    没有就用本次请求的快照),不是此刻的进程级假设 —— analyze 之后 /api/assumptions 可能已经把它改了,
+    追问上一轮结果(about_results)时更是如此。一致就用原来的 describe();不一致就直接按那份快照写,并注明。"""
+    used = next((m["assumptions"] for m in metrics if m.get("assumptions")), None) or (state.get("assumption_snap") or {}).get("display")
+    before = assumptions.snapshot()
+    lines = assumptions.describe()
+    if used is None or (before == used and assumptions.snapshot() == used):
+        return lines
+    opex, fees = used.get("opex_rate"), used.get("other_acquisition_costs")
+    if opex is None or fees is None:
+        return [_t(state, "这批指标计算时的假设与当前进程级假设不同,不要引用具体的运营支出比例或购置开销数值。",
+                   "The assumptions used for these metrics differ from the current global ones; do not quote a specific operating-expense "
+                   "ratio or acquisition-cost figure.")]
+    return [_t(state, f"运营支出按年租金的 {opex:.1%} 计(这批指标计算时用的假设;进程级假设之后已被改动,以此为准)",
+               f"Operating expenses at {opex:.1%} of annual rent (the assumption used for these metrics; the global assumption has since changed — use this one)"),
+            _t(state, f"印花税之外的购置开销(过户/律师费、验房费等)按 ${fees:,.0f} 计(同上;印花税另按法定税率算)",
+               f"Other acquisition costs excluding stamp duty (conveyancing, inspections etc.) of ${fees:,.0f} (same; stamp duty is calculated separately at statutory rates)")]
+
+
 def explain(state: State) -> dict:
     """LLM 把已算好的数字说成人话。它只解释,不产数字。
 
@@ -1430,6 +2061,12 @@ def explain(state: State) -> dict:
       concept              -> 纯概念解释,单独一套提示词,严禁出现房源数字
     """
     intent = state.get("intent") or "new_search"
+    parking_kind = _parking_kind(state.get("user_query"))
+    parking_notice = _parking_notice(state, parking_kind)
+
+    if state.get("turn_notice"):
+        answer = state["turn_notice"]
+        return {"answer": answer, "history": [{"role": "助手", "text": answer}]}
 
     if intent == "concept":
         try:
@@ -1449,20 +2086,45 @@ def explain(state: State) -> dict:
                         "looking for first.")
         else:
             answer = _no_result_answer(state.get("params") or {}, _en(state))
+            if state.get("ranking"):
+                answer += "\n" + state["ranking"].replace(";", "\n")
+        if parking_notice:
+            answer = parking_notice + "\n" + answer
         return {"answer": answer, "history": [{"role": "助手", "text": answer[:80]}]}
 
     # 给每套贴上**用户在界面上看到的编号**。翻到第三批时卡片是 11–15,
     # 模型如果按自己看到的顺序叫"第 1 套",就和卡片、地图全对不上。
     offset = int(state.get("batch_offset") or 0)
-    numbered = [{"display_no": offset + i + 1, **m} for i, m in enumerate(metrics)]
+    # 解释使用独立副本；车位不作为可展示事实，原 metrics / 估值输入保持不变。
+    numbered = [{"display_no": offset + i + 1, **{k: v for k, v in m.items() if k != "car_spaces"}}
+                for i, m in enumerate(metrics)]
     facts = json.dumps(numbered, ensure_ascii=False, indent=2, default=str)
-    assumption_lines = "\n".join(f"  - {line}" for line in assumptions.describe())
+    assumption_lines = "\n".join(f"  - {line}" for line in _assumption_lines(state, metrics))
     context = [f"用户的问题:{state['user_query']}"]
     if intent == "about_results":
         context.append("这是一个**针对上一轮结果的追问**,下面的房源就是上一轮给出的那几套,"
                        "没有重新检索。回答时不要说「为你找到」,要直接回答他问的那一点。")
     else:
         context.append(f"本次结果的排序口径:{state.get('ranking') or '按语义相关度排序'}")
+        goals = (state.get("params") or {}).get("relative_preferences") or []
+        if goals:
+            comparisons = [{"attribute": goal["field"], "direction": goal["direction"],
+                            "degree": goal["degree"], "previous_displayed_median": goal["baseline"],
+                            "current_displayed_median": refinement.baseline_for(metrics, goal["field"])}
+                           for goal in goals]
+            context.append("本轮是【相对调整】,不是寻找该属性的最高分或最低价。必须以这条解释口径为准:\n"
+                "1. 开头先说明保留哪些原要求,并在上一轮基础上做小幅/适度调整。\n"
+                "2. 以下比较数值由程序从实际展示结果计算。引用 previous_displayed_median/current_displayed_median 时必须明确写【这批房源的评分中位数】,不能仅说整体分数或每套提高。分数是系统相对评价,不是实测噪声、全库排名或市场统计。\n"
+                "3. 安静等旧条件仍是用户要求,不能说满足它的房源与本轮诉求相反。用户没有改口追求最热闹。\n"
+                "4. 结果是符合原条件的局部调整候选,不能说只能在这几套里选、其他地方找不到更热闹的,也不能按分数绝对高低否定这次相对提升。\n"
+                "5. 对照实际房源说明取舍,不宣称新列表每套都比旧列表每套更好。\n"
+                "仍生效的条件:" + json.dumps(state.get("params") or {}, ensure_ascii=False) +
+                "\n程序计算的本轮比较:" + json.dumps(comparisons, ensure_ascii=False))
+
+    if parking_kind:
+        context.append("房源自带车位无法核验,不得说任何房源有或没有车位,也不得据此推荐或声称按车位筛选。"
+                       "附近公共停车设施、规划 Parking Overlay 和地点名称与房源自带车位不同。"
+                       "系统会另给用户核验提示;其余问题照常回答。")
 
     lookup = state.get("place_lookup")
     if lookup and lookup.get("error"):
@@ -1482,6 +2144,8 @@ def explain(state: State) -> dict:
             f"(说明生成失败:{exc};上方房源与指标均为系统计算结果,不受影响)",
             f"(Could not generate the summary: {exc}. The properties and metrics above are "
             f"computed by the system and are unaffected.)")
+    if parking_notice:
+        answer = parking_notice + "\n" + answer
     return {"answer": answer, "history": [{"role": "助手", "text": answer[:80]}]}
 
 

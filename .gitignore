@@ -51,3 +51,34 @@ data/*
 # 遗留在此。先排除在基线提交之外:一旦进了 Git 历史就只能改写历史才能拿掉。
 # 去留待所有者确认,见 docs/TODO.md。
 _rhine_analysis/
+
+# Local-only material that must not be published:
+#   _local_backups/      UI backups kept for the owner (copies of app/web before redesigns)
+#   design/white-city*/  binary Blender files + render outputs for the homepage showroom (~2.8GB);
+#                        the shipped result lives in app/web/showroom/ and IS tracked
+#   .codex/              local agent hook config (points at the gitignored .claude/)
+#   *.dump.tmp           scratch output of db/export_seed.py
+_local_backups/
+.codex/
+# design/white-city*/: keep only the text sources (scripts, notes, page modules);
+# drop .blend files, bakes, renders, logs and backup copies.
+design/white-city/**
+design/white-city-try/**
+!design/white-city/**/
+!design/white-city-try/**/
+!design/white-city/**/*.md
+!design/white-city/**/*.py
+!design/white-city/**/*.mjs
+!design/white-city/**/*.cjs
+!design/white-city/**/*.js
+!design/white-city/**/*.html
+!design/white-city-try/**/*.md
+!design/white-city-try/**/*.py
+!design/white-city-try/**/*.mjs
+!design/white-city-try/**/*.cjs
+!design/white-city-try/**/*.js
+!design/white-city-try/**/*.html
+design/white-city/**/backup-*/**
+design/white-city-try/**/backup-*/**
+*.dump.tmp
+!design/white-city/blender/city-04-assets.json

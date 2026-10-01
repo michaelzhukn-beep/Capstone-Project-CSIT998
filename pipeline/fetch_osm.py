@@ -17,8 +17,10 @@
 """
 
 import csv
+import hashlib
 import json
 import math
+import os
 import sys
 import time
 import urllib.parse
@@ -47,24 +49,34 @@ UA = "CSIT998-capstone-student-project/1.0"
 ALIAS_TAGS = ("alt_name", "short_name", "official_name", "name:en", "name:zh")
 
 
-def _build_query(geometries: tuple[str, ...]) -> str:
-    """从注册表生成 Overpass 查询。点用 out center,线和面用 out geom。"""
+def _build_query(geometries: tuple[str, ...], only: str | None = None) -> str:
+    """从注册表生成 Overpass 查询。点用 out center,线和面用 out geom。
+    only 指定时只查这一个源 —— 线与面带完整几何,全部塞进一次请求会超出公共端点的内存上限。"""
     clauses = []
     for kind, source in SOURCES.items():
         if source["geometry"] not in geometries or not source["overpass"]:
+            continue
+        if only and kind != only:
             continue
         for fragment in source["overpass"].split(";"):
             fragment = fragment.strip()
             if fragment:
                 clauses.append(f"  {fragment}({BBOX});")
     out = "out geom;" if "point" not in geometries else "out center tags;"
-    return "[out:json][timeout:300];\n(\n" + "\n".join(clauses) + "\n);\n" + out
+    return "[out:json][timeout:900][maxsize:1073741824];\n(\n" + "\n".join(clauses) + "\n);\n" + out
 
 
 def _fetch(query: str, label: str) -> list[dict]:
     print(f"正在请求 {label}……")
+    # 设了 OSM_CACHE_DIR 就把原始响应按查询内容存一份:十几个请求中途失败时,重跑不必全部重下,
+    # 也少给公共端点添负担。
+    cache_dir = os.environ.get("OSM_CACHE_DIR")
+    cache = (Path(cache_dir) / (hashlib.sha1(query.encode()).hexdigest()[:16] + ".json")) if cache_dir else None
+    if cache and cache.exists():
+        print(f"  读缓存 {cache.name}")
+        return json.loads(cache.read_bytes())["elements"]
     payload = urllib.parse.urlencode({"data": query}).encode()
-    for attempt in range(2):
+    for attempt in range(4):
         for endpoint in ENDPOINTS:
             try:
                 started = time.time()
@@ -72,29 +84,62 @@ def _fetch(query: str, label: str) -> list[dict]:
                                                  headers={"User-Agent": UA})
                 raw = urllib.request.urlopen(request, timeout=600).read()
                 print(f"  {endpoint} · {len(raw) / 1e6:.1f} MB · {time.time() - started:.0f}s")
-                return json.loads(raw)["elements"]
+                elements = json.loads(raw)["elements"]
+                if cache:
+                    cache.parent.mkdir(parents=True, exist_ok=True)
+                    cache.write_bytes(raw)
+                # 线与面按源逐个请求,连着发会被公共端点 429 限流。每次成功后歇一会儿。
+                time.sleep(15)
+                return elements
             except Exception as exc:
                 print(f"  {endpoint} 失败({type(exc).__name__}: {exc}),换下一个")
-        if attempt == 0:
-            print("  全部端点失败,等 30 秒重试一轮……")
-            time.sleep(30)
+        if attempt < 3:
+            wait = 60 * (attempt + 1)
+            print(f"  全部端点失败,等 {wait} 秒重试一轮……")
+            time.sleep(wait)
     raise SystemExit(f"取不到 {label} 数据。稍后重试。")
 
 
 def _resample(geometry: list[dict], step_m: int) -> list[tuple[float, float]]:
-    """沿折线按约 step_m 米取点。用简易的度->米换算即可 —— 这里只决定采样
-    密度,不是最终距离计算,不需要 haversine 的精度。"""
-    out, last = [], None
-    for point in geometry:
-        lat, lon = point["lat"], point["lon"]
-        if last is None:
-            out.append((lat, lon))
-            last = (lat, lon)
+    """沿折线每 step_m 米取一个点,**在线段中间插值**,首尾顶点都保留。
+
+    旧版只是跳过相距不足 step_m 的原始顶点、从不插值:一段只有两个顶点的 800 米直路
+    只剩两个端点,路中间的房子会被算成离路 400 米。道路顶点通常够密,审计时没暴露;
+    公园边界常是几百米的直边,改按边界采样后这个缺陷就会直接变成错数。
+    用简易的度->米换算即可 —— 这里只决定采样位置,最终距离由 haversine 算。
+    """
+    pts = [(p["lat"], p["lon"]) for p in geometry if "lat" in p and "lon" in p]
+    if not pts:
+        return []
+    out = [pts[0]]
+    carry = 0.0                      # 上一个采样点之后已经走过的距离
+    for (a_lat, a_lon), (b_lat, b_lon) in zip(pts, pts[1:]):
+        seg = math.hypot((b_lat - a_lat) * 111_000, (b_lon - a_lon) * 88_000)
+        if seg == 0:
             continue
-        if math.hypot((lat - last[0]) * 111_000, (lon - last[1]) * 88_000) >= step_m:
-            out.append((lat, lon))
-            last = (lat, lon)
+        pos = step_m - carry
+        while pos <= seg:
+            t = pos / seg
+            out.append((a_lat + (b_lat - a_lat) * t, a_lon + (b_lon - a_lon) * t))
+            pos += step_m
+        carry = (carry + seg) % step_m
+    if out[-1] != pts[-1]:
+        out.append(pts[-1])
     return out
+
+
+def _outlines(element: dict) -> list[list[dict]]:
+    """一个要素的所有轮廓线。way 自带 geometry;relation(大公园常是多边形关系)
+    的轮廓散在各个成员里 —— 只读 element["geometry"] 会让这些公园整个消失。"""
+    if element.get("geometry"):
+        return [element["geometry"]]
+    return [m["geometry"] for m in element.get("members") or [] if m.get("geometry")]
+
+
+def _aliases(tags: dict, name: str) -> str:
+    return " | ".join(dict.fromkeys(
+        (tags.get(k) or "").strip() for k in ALIAS_TAGS
+        if (tags.get(k) or "").strip() and (tags.get(k) or "").strip() != name))
 
 
 def _school_levels(tags: dict) -> list[str]:
@@ -155,7 +200,8 @@ def _match_kinds(tags: dict) -> list[str]:
     return [kind for kind, source in SOURCES.items()
             if not source.get("school_level")
             and (_rule_hits(source.get("match"), tags)
-                 or _rule_hits(source.get("extra_match"), tags))]
+                 or _rule_hits(source.get("extra_match"), tags))
+            and not _rule_hits(source.get("exclude"), tags)]
 
 
 def _coords(element: dict):
@@ -177,50 +223,76 @@ def main() -> None:
         name = (tags.get("name") or "").strip()
         # 别名也存:墨尔本机场正式名 "Melbourne Airport",本地人叫 "Tullamarine"。
         # 只存正式名的话,"离 Tullamarine 近"就查不到。
-        aliases = " | ".join(dict.fromkeys(
-            (tags.get(k) or "").strip() for k in ALIAS_TAGS
-            if (tags.get(k) or "").strip() and (tags.get(k) or "").strip() != name))
+        aliases = _aliases(tags, name)
         for kind in _match_kinds(tags):
             if SOURCES[kind]["geometry"] != "point":
                 continue
             rows.append({"kind": kind, "name": name, "alt_names": aliases,
                          "latitude": round(position[0], 5),
-                         "longitude": round(position[1], 5)})
+                         "longitude": round(position[1], 5), "osm_id": "", "role": ""})
 
     # ---- 线与面 ----
-    for element in _fetch(_build_query(("line", "area")), "线与面(主干道、铁路、工业区)"):
+    # role:空 = 一个具名的点(点要素本身,或面要素的中心);edge = 沿线/沿边界的采样点。
+    # 面要素的边界点也带着名字和 osm_id:最近的那个边界点属于哪个公园,名字就报哪个;
+    # 按名字查"离 Albert Park 多远"时,用 osm_id 把这个公园的整圈边界找回来。
+    shaped = [k for k, v in SOURCES.items() if v["geometry"] in ("line", "area") and v["overpass"]]
+    fetched = ((kind, element) for kind in shaped
+               for element in _fetch(_build_query(("line", "area"), only=kind), f"线与面:{SOURCES[kind]['zh']}"))
+    for fetched_kind, element in fetched:
         tags = element.get("tags", {})
-        for kind in _match_kinds(tags):
-            if SOURCES[kind]["geometry"] not in ("line", "area"):
+        # 每次请求只查一个源,所以一个要素只归给它被查出来的那个源 ——
+        # 否则同时带 leisure=park 和 landuse=cemetery 的要素会在两次请求里各记一遍
+        kinds = [fetched_kind] if fetched_kind in _match_kinds(tags) else []
+        if not kinds:
+            continue
+        osm_id = f"{element.get('type', '')[:1]}{element.get('id', '')}"
+        name = (tags.get("name") or "").strip()
+        aliases = _aliases(tags, name)
+        for kind in kinds:
+            area = SOURCES[kind]["geometry"] == "area"
+            if area and "lat" in element and "lon" in element:
+                # 只标了一个点的小公园:就这一个点,没有边界
+                rows.append({"kind": kind, "name": name, "alt_names": aliases,
+                             "latitude": round(element["lat"], 5), "longitude": round(element["lon"], 5),
+                             "osm_id": osm_id, "role": ""})
                 continue
-            for lat, lon in _resample(element.get("geometry") or [], RESAMPLE_M):
-                rows.append({"kind": kind, "name": "", "alt_names": "",
-                             "latitude": round(lat, 5), "longitude": round(lon, 5)})
+            if area and element.get("bounds"):
+                b = element["bounds"]
+                rows.append({"kind": kind, "name": name, "alt_names": aliases,
+                             "latitude": round((b["minlat"] + b["maxlat"]) / 2, 5),
+                             "longitude": round((b["minlon"] + b["maxlon"]) / 2, 5),
+                             "osm_id": osm_id, "role": ""})
+            for outline in _outlines(element):
+                for lat, lon in _resample(outline, RESAMPLE_M):
+                    rows.append({"kind": kind, "name": name if area else "", "alt_names": "",
+                                 "latitude": round(lat, 5), "longitude": round(lon, 5),
+                                 "osm_id": osm_id if area else "", "role": "edge"})
 
     OUT.parent.mkdir(exist_ok=True)
     with OUT.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
-            handle, fieldnames=["kind", "name", "alt_names", "latitude", "longitude"])
+            handle, fieldnames=["kind", "name", "alt_names", "latitude", "longitude", "osm_id", "role"])
         writer.writeheader()
         writer.writerows(rows)
 
-    counts = Counter(r["kind"] for r in rows)
-    named = Counter(r["kind"] for r in rows if r["name"])
+    counts = Counter(r["kind"] for r in rows if r["role"] != "edge")
+    edges = Counter(r["kind"] for r in rows if r["role"] == "edge")
+    named = Counter(r["kind"] for r in rows if r["name"] and r["role"] != "edge")
     print(f"\n已写入 {OUT}({len(rows):,} 行,{OUT.stat().st_size / 1e6:.1f} MB)\n")
-    print(f"  {'数据源':<20}{'抓到':>10}{'有名字':>9}{'注册表登记':>12}  一致?")
+    print(f"  {'数据源':<20}{'要素':>10}{'边界点':>10}{'有名字':>9}{'注册表登记':>12}  一致?")
     problems = []
     for kind, source in SOURCES.items():
         got, expect = counts.get(kind, 0), source.get("count")
-        if source["geometry"] == "point" and expect:
-            # 点要素抓到的数量应当和注册表登记的数量接近。差太多说明查询写错了,
-            # 或者 OSM 上的数据变了 —— 两种都需要人看一眼。
+        if source["geometry"] in ("point", "area") and expect:
+            # 点要素(和面要素的中心点)抓到的数量应当和注册表登记的数量接近。差太多说明
+            # 查询写错了,或者 OSM 上的数据变了 —— 两种都需要人看一眼。
             ok = 0.5 <= got / expect <= 2.0
         else:
-            ok = got > 0        # 线/面重采样后点数远多于要素数,只能查"非空"
+            ok = got + edges.get(kind, 0) > 0     # 线只有采样点,只能查"非空"
         mark = "✓" if ok else "✗ 要查"
         if not ok:
             problems.append(kind)
-        print(f"  {source['zh']:<18}{got:>10,}{named.get(kind, 0):>9,}"
+        print(f"  {source['zh']:<18}{got:>10,}{edges.get(kind, 0):>10,}{named.get(kind, 0):>9,}"
               f"{(expect or '—'):>12}  {mark}")
 
     if problems:

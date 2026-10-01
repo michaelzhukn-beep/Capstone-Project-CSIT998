@@ -135,6 +135,7 @@ _OVERLAY_FAMILIES = {
     "RXO":  ("道路封闭",                 "build"),
     "CLPO": ("City Link 工程叠加",       "build"),
     "PSB":  ("受保护聚落边界",           "build"),
+    "BAO":  ("缓冲区(限制敏感用途)",   "build"),
     "PAO":  ("政府已划定将来征收",       "risk"),
     "SBO":  ("特殊建筑(排水/内涝)",    "risk"),
     "LSIO": ("洪泛淹没区",               "risk"),

@@ -37,8 +37,8 @@ ATTRIBUTES_EN = {
 
 # 这些注解是**属性的定义**,不是对某套房的判断 —— 界面上写作「高分含义:…」。
 ATTRIBUTE_NOTES_EN = {
-    "quiet": "far from main and secondary roads, railways and industry, with few late-night venues nearby",
-    "lively": "dense shops, restaurants and late-night venues nearby",
+    "quiet": "far from main, secondary and tertiary roads, railways, tram lines and industry, with few bars and clubs nearby",
+    "lively": "dense shops, eateries, bars and clubs nearby",
     "convenient": "many shops and eateries within walking distance, close to a supermarket and pharmacy",
     "shopping": "close to a shopping centre and supermarket",
     "green": "close to a park or reserve",
@@ -96,11 +96,13 @@ EVIDENCE_EN = {
     "cemetery_m": ("Nearest cemetery", "m"),
     "major_road_m": ("Nearest main road", "m"),
     "secondary_road_m": ("Nearest secondary road", "m"),
+    "tertiary_road_m": ("Nearest tertiary road", "m"),
+    "tram_line_m": ("Nearest tram line", "m"),
     "railway_m": ("Nearest railway line", "m"),
     "industrial_m": ("Nearest industrial land", "m"),
     "substation_m": ("Nearest substation", "m"),
     "fuel_m": ("Nearest petrol station", "m"),
-    "nightlife_300m": ("Late-night venues within 300 m", ""),
+    "nightlife_300m": ("Bars, pubs and clubs within 300 m", ""),
     "shop_800m": ("Shops and eateries within 800 m", ""),
     "size_m2": ("Size", "m²"),
     "distance_cbd_km": ("Distance to CBD", "km"),
@@ -133,6 +135,7 @@ PROPERTY_TYPES_EN = {"house": "House", "apartment": "Apartment", "townhouse": "T
 # UNSUPPORTED 的**键**本身是中文,而且会被 LLM 原样填进 unsupported_asks
 # 再显示给用户 —— 所以键和值都要翻。
 UNSUPPORTED_KEY_EN = {
+    "房源车位": "property car spaces",
     "采光朝向": "aspect and natural light",
     "装修房况": "condition and renovation",
     "房龄新旧": "property age",
@@ -240,6 +243,7 @@ OVERLAY_LABELS_EN = {
     "道路封闭": "Road Closure",
     "City Link 工程叠加": "City Link Project",
     "受保护聚落边界": "Protected Settlement Boundary",
+    "缓冲区(限制敏感用途)": "Buffer Area Overlay (sensitive uses restricted)",
     "政府已划定将来征收": "Public Acquisition (earmarked)",
     "特殊建筑(排水/内涝)": "Special Building (drainage / overland flow)",
     "洪泛淹没区": "Land Subject to Inundation",

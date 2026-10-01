@@ -45,16 +45,25 @@ def _load() -> dict:
 
     buckets: dict[str, list] = {}
     named = []
+    # 面要素(公园、海滩、墓地)的边界采样点,按 osm_id 归组。按名字找到一个公园后,
+    # 量距离要量到它的边界,而不是量到中心点 —— 中心点离得远的大公园,边可能就在门口。
+    edges: dict[str, list] = {}
     with _CSV.open(encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
             lat, lon = float(row["latitude"]), float(row["longitude"])
             buckets.setdefault(row["kind"], []).append((lat, lon, row["name"]))
+            if row.get("role") == "edge":
+                # 边界点只进最近距离的树,不进具名索引:一个公园一圈几十上百个点,
+                # 全塞进按名字线性扫描的索引会把查地名拖慢一个量级
+                if row.get("osm_id"):
+                    edges.setdefault(row["osm_id"], []).append((lat, lon))
+                continue
             if row["name"]:
                 # 具名查找用"正式名 + 别名"合起来的词集合 —— 墨尔本机场正式名
                 # 叫 Melbourne Airport,用户会说 Tullamarine,不认别名就查不到。
                 named.append((row["name"],
                               _tokens(row["name"] + " " + (row.get("alt_names") or "")),
-                              row["kind"], lat, lon))
+                              row["kind"], lat, lon, row.get("osm_id") or ""))
 
     # 每类建一棵 BallTree(haversine 度量,直接吃弧度经纬度)。
     #
@@ -76,6 +85,7 @@ def _load() -> dict:
             for kind, pts in buckets.items() if pts
         },
         "named": named,
+        "edges": edges,
         "total": sum(len(v) for v in buckets.values()),
     }
     return _data
@@ -223,8 +233,8 @@ def find_place(query: str, kind: str | None = None, limit: int = 40) -> list[dic
     rows = _load()["named"]
 
     def search(tokens: set[str], restrict: str | None) -> list[dict]:
-        return [{"name": name, "kind": row_kind, "latitude": lat, "longitude": lon}
-                for name, name_tokens, row_kind, lat, lon in rows
+        return [{"name": name, "kind": row_kind, "latitude": lat, "longitude": lon, "osm_id": osm_id}
+                for name, name_tokens, row_kind, lat, lon, osm_id in rows
                 if (not restrict or row_kind == restrict) and tokens <= name_tokens]
 
     # 两轮降级,一旦有结果就停:
@@ -251,11 +261,17 @@ def distance_to_place(lat, lon, places: list[dict]) -> dict | None:
     """一套房到某个具名地点的距离 —— 取到所有同名点里最近的那个。"""
     if lat is None or lon is None or not places:
         return None
-    group = {"lat": np.radians(np.array([p["latitude"] for p in places], dtype=np.float32)),
-             "lon": np.radians(np.array([p["longitude"] for p in places], dtype=np.float32))}
+    # 面要素把整圈边界点展开进来,量到最近的边;点要素就是它自己
+    edges = _load()["edges"]
+    pts = []
+    for p in places:
+        pts.append((p["latitude"], p["longitude"], p["name"]))
+        pts.extend((a, b, p["name"]) for a, b in edges.get(p.get("osm_id") or "", ()))
+    group = {"lat": np.radians(np.array([p[0] for p in pts], dtype=np.float64)),
+             "lon": np.radians(np.array([p[1] for p in pts], dtype=np.float64))}
     distances = _haversine_m(lat, lon, group)
     index = int(np.argmin(distances))
-    return {"name": places[index]["name"],
+    return {"name": pts[index][2],
             "distance_m": int(round(float(distances[index])))}
 
 
@@ -268,6 +284,24 @@ def walk_minutes(distance_m: int | None) -> int | None:
     if distance_m is None:
         return None
     return max(1, int(round(distance_m / 1000 / 5 * 60)))
+
+
+# 墨尔本 CBD 的参照点:Melbourne GPO(Bourke St 与 Elizabeth St 路口)。
+CBD_POINT = (-37.8136, 144.9631)
+
+
+def distance_to_cbd_km(lat, lon, fallback=None) -> float | None:
+    """房源到 CBD 的直线距离(公里,一位小数)。有坐标就按坐标算,没有才用数据集自带的值。
+
+    **为什么不直接用数据集的 Distance 列。** 它是按区给的一个数,而且有 106 个区系统性写错:
+    Werribee 全区写 14.7 km,按坐标实为约 28 km;Point Cook 14.7 vs 21.9(审计 BUG-05)。
+    **不改数据集** —— 展示和打分改用坐标算;估值模型仍用原列,因为它就是拿原列训练的,
+    临时换输入会让模型拿到训练时没见过的分布。
+    """
+    if lat is not None and lon is not None:
+        return round(distance_between(lat, lon, *CBD_POINT) / 1000, 1)
+    # NaN / inf 不是距离:原样返回会让 SSE 里出现裸 NaN(不是合法 JSON,浏览器 JSON.parse 会整条报错)
+    return round(float(fallback), 1) if isinstance(fallback, (int, float)) and math.isfinite(fallback) else None
 
 
 def distance_between(lat1, lon1, lat2, lon2) -> int | None:

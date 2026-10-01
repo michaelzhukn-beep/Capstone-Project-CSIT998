@@ -17,9 +17,12 @@
     metrics: [], ranking: '', count: 0, answer: '', running: false,
     selectedId: null, map: null, mapRO: null, pins: [],
     // 「换一批」用的翻页。pool 是排序后的前 20 套(后端一次给全,已经算好了),
-    // metrics 是当前展示的那 5 套,offset 是它们在 pool 里的起点。
+    // metrics 是最新结果的那 5 套,offset 是它们在 pool 里的起点;历史展示独立读取 historyView。
     pool: [], offset: 0, moreBuf: null,
-    lang: 'zh',
+    lang: 'zh', requestSerial: 0, resultNotice: '', historyView: null,
+    // 详情窗:compare 是并排中的房源(空 = 单开);detailMetric 是单开的那套;
+    // detailToken 标记这次详情是谁打开的(房源编号或 'compare'),关闭时告诉收藏模块
+    compare: [], detailMetric: null, detailToken: null, cmpDiff: false,
     measure: null,        // 距离测算画在地图上的那一层(图钉 + 线 + 标签)
     measureBounds: null,  // 那两个端点的包围盒 —— 详情窗关掉后要按整幅地图重新取景
     measureOff: null,     // 解绑测距那层挂在地图上的监听,擦除时要调
@@ -33,9 +36,28 @@
    *  而且报的错是「L.map is not a function」,和语言功能看不出任何关系。 */
   let T = window.I18N.zh;
 
+  // 搜索状态始终留在 state;回看只切换展示层,不能把历史条件写回会话。
+  const answerSnapshots = new WeakMap(), referenceTargets = new WeakMap();
+  const resultView = () => state.historyView || state;
+  const resultKey = view => JSON.stringify([view.offset, view.metrics.map(m => String(m.id))]);
+  function snapshotResults() {
+    const snapshot = structuredClone({ metrics: state.metrics, params: state.params,
+      offset: state.offset, ranking: state.ranking, count: state.count });
+    snapshot.key = resultKey(snapshot); snapshot.createdAt = new Date();
+    return snapshot;
+  }
+  function showResultSnapshot(snapshot) {
+    if (state.running) return;
+    const next = snapshot && snapshot.key !== resultKey(state) ? snapshot : null;
+    if (state.historyView === next) return;
+    closeSheet(); state.selectedId = null; state.historyView = next;
+    renderResults();
+  }
+  function returnToLatest() { showResultSnapshot(null); }
+
   const money = v => (v == null || isNaN(v)) ? '—' : '$' + Math.round(v).toLocaleString('en-AU');
-  const pct = v => (v == null || isNaN(v)) ? '—' : (v * 100).toFixed(1) + '%';
-  const dist = m => (m == null || isNaN(m)) ? '—' : (m >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m');
+  const pct = (v, digits = 1) => (v == null || isNaN(v)) ? '—' : (v * 100).toFixed(digits) + '%';
+  const dist = m => (m == null || isNaN(m)) ? '—' : (Math.round(m) >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m');
   const ptZh = t => (state.meta && state.meta.property_types[t]) || t || '';
   // 数据集里 house 这一类的官方口径是 house/cottage/villa/semi/terrace ——
   // 后三种常写成「1/28 X St」这样带单元号的地址,统统叫「独立屋」会误导人:
@@ -50,6 +72,16 @@
   const DOT = '<svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.5" fill="currentColor"></circle></svg>';
   const X = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>';
   const PENCIL = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>';
+  // 图标只表示类别;未来新增的偏好仍用 tag,不按每个属性维护图标。
+  const CATEGORY_PATHS = {
+    budget: '<rect x="3" y="5" width="18" height="15" rx="3"/><path d="M3 9h18m-6 5h3"/>',
+    rooms: '<path d="M3 18V8m18 10V8M3 15h18M3 11h18v4H3zm3 0V7h5v4m2 0V7h5v4"/>',
+    home: '<path d="m3 10 9-7 9 7M5 9v12h14V9m-9 12v-8h4v8"/>',
+    location: '<path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.5"/>',
+    tag: '<path d="M3 4h8l10 10-7 7L3 10Z"/><circle cx="7.5" cy="8" r="1"/>',
+    person: '<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2Z"/>',
+  };
+  const categoryIcon = name => '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (CATEGORY_PATHS[name] || CATEGORY_PATHS.tag) + '</svg>';
   // 各节点的进度文案在 i18n.js 的 T.nodes 里
 
   // 断点直接引用 CSS 里的同两个值。写死数字的话,改了 CSS 忘了改 JS,
@@ -64,13 +96,24 @@
   }
   /** 布局形态。welcome:单列居中,不摆空栏;working:分栏。
    *  没有结果却摆着三个空栏,页面就有 80% 是空的 —— 那是没内容,不是留白。 */
-  function setStage(s) { $('#app').dataset.stage = s; }
+  function setStage(s) {
+    $('#app').dataset.stage = s;
+    $('#brand-home').disabled = s === 'welcome';      // 首页上 logo 不可点(已经在首页了)
+    $('#input').placeholder = s === 'working' ? T.workingPlaceholder : T.inputPlaceholder;
+    $('#input').setAttribute('aria-label', $('#input').placeholder);
+    if (s === 'welcome') renderDrift(); else stopDrift();
+  }
 
   function resetAll() {
+    clearTimeout(state.focusTimer); state.focusTimer = null;
+    state.requestSerial++; // 已发出的旧会话响应不能再写进新页面。
+    state.resultNotice = ''; setRunning(false);
     newThread();
     Object.assign(state, { params: null, intent: null, metrics: [], ranking: '', count: 0,
-                           answer: '', selectedId: null, pool: [], offset: 0, moreBuf: null });
+                           answer: '', selectedId: null, pool: [], offset: 0, moreBuf: null, historyView: null });
     $('#chat').innerHTML = '';        // 引导语在 #welcome 里,不再往对话里塞一条
+    $('#condition-dock').replaceChildren(); condCard = null; editingConditions = false;
+    $('#input').value = '';
     $('#results').innerHTML = '';
     closeSheet();
     $('#detail').innerHTML = '';
@@ -82,69 +125,90 @@
 
   // ---------------------------------------------------------------- SSE
   async function streamPost(url, body, on) {
-    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (!res.ok || !res.body) { on.error && on.error({ message: await res.text() }); return; }
-    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) >= 0) {
-        const raw = buf.slice(0, idx); buf = buf.slice(idx + 2);
-        let ev = 'message', data = '';
-        for (const line of raw.split('\n')) {
-          if (line.startsWith('event:')) ev = line.slice(6).trim();
-          else if (line.startsWith('data:')) data += line.slice(5).trim();
+    const request = ++state.requestSerial, thread = state.threadId;
+    const current = () => request === state.requestSerial && thread === state.threadId;
+    let finished = false;
+    const fail = payload => { if (current() && !finished) { finished = true; on.error?.(payload); } };
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!res.ok || !res.body) { fail({ message: await res.text() }); return; }
+      const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (!current()) { await reader.cancel(); return; }
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const raw = buf.slice(0, idx); buf = buf.slice(idx + 2);
+          let ev = 'message', data = '';
+          for (const line of raw.split('\n')) {
+            if (line.startsWith('event:')) ev = line.slice(6).trim();
+            else if (line.startsWith('data:')) data += line.slice(5).trim();
+          }
+          let payload = {}; try { payload = JSON.parse(data || '{}'); } catch (_) { /* ignore */ }
+          if (finished) continue;
+          if (ev === 'error') { fail(payload); continue; }
+          if (ev === 'done') finished = true;
+          on[ev] && on[ev](payload);
         }
-        let payload = {}; try { payload = JSON.parse(data || '{}'); } catch (_) { /* ignore */ }
-        on[ev] && on[ev](payload);
       }
-    }
+      if (!finished) fail({ message: T.incompleteStream });
+    } catch (error) { fail({ message: error.message || String(error) }); }
   }
 
   // ---------------------------------------------------------------- 对话区
-  function addUser(text) { const e = h('div', 'msg-user', text); $('#chat').appendChild(e); scrollChat(); return e; }
+  function addMessage(kind, text) {
+    const row = h('article', 'msg-row msg-row-' + kind);
+    const avatar = h('div', 'msg-avatar'); avatar.setAttribute('aria-hidden', 'true');
+    if (kind === 'user') avatar.innerHTML = categoryIcon('person'); else avatar.textContent = 'AI';
+    const main = h('div', 'msg-main'), body = h('div', 'msg-' + kind, text);
+    const now = new Date(), time = h('time', 'msg-time', now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }));
+    time.dateTime = now.toISOString(); main.append(body, time); row.append(avatar, main);
+    $('#chat').appendChild(row); return body;
+  }
+  function addUser(text) { const e = addMessage('user', text); scrollChat(); return e; }
   function addStatus() { const e = h('div', 'msg-status'); e.innerHTML = '<span class="dot"></span><span class="t"></span>'; e.querySelector('.t').textContent = T.statusInit; $('#chat').appendChild(e); scrollChat(); return e; }
-  function scrollChat() { const c = $('#chat'); if (twoColumn()) c.parentElement.scrollTop = c.parentElement.scrollHeight; else window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }); }
+  function scrollChat() { const c = $('#chat'); if (twoColumn()) c.scrollTop = c.scrollHeight; else c.lastElementChild?.scrollIntoView({ block: 'nearest' }); }
 
   let condCard = null;
+  let editingConditions = false;
   function ensureCondCard() {
     if (!condCard) condCard = h('div', 'conditions');
-    $('#chat').appendChild(condCard);          // 永远跟在最新一轮后面
+    $('#condition-dock').appendChild(condCard); // 条件与输入框留在栏底,消息独立滚动
     return condCard;
   }
 
   function runHandlers(statusEl, assistantEl) {
-    let tokens = '';
+    let tokens = '', finalAnswer = '';
+    const staged = {};
     return {
       node: ({ node }) => { const t = statusEl.querySelector('.t'); if (t) t.textContent = T.nodeStatus(T.nodes[node] || node); },
       params: ({ intent, params }) => {
-        state.intent = intent; state.params = params;
-        if (intent === 'new_search' || intent === 'refine') { renderConditions(); }
+        staged.intent = intent; staged.params = params;
       },
-      ranking: ({ ranking, count }) => { state.ranking = ranking || ''; state.count = count || 0; renderConditions(); },
+      ranking: ({ ranking, count }) => { staged.ranking = ranking || ''; staged.count = count || 0; },
       // more 比 results 先到(rank 在 present 之前),先接住,等 results 到了再拼
-      more: ({ metrics }) => { state.moreBuf = metrics || []; },
+      more: ({ metrics }) => { staged.pool = metrics || []; },
       results: ({ metrics }) => {
-        state.metrics = metrics || []; state.selectedId = null;
-        // more 事件带的是**含前 5 套在内**的前 20 套,是个稳定的池子;
-        // 拿它直接当 pool,不要再和 metrics 拼 —— 换过一次批之后 metrics 就变了,
-        // 拼出来的池子会重复、会错位。
-        state.pool = (state.moreBuf && state.moreBuf.length) ? state.moreBuf : (metrics || []);
-        state.offset = 0; state.moreBuf = null;
-        // 详情现在是覆盖层(宽屏从右侧滑出、盖住地图),换了一批结果就得关掉 ——
-        // 否则它会继续挡着地图,展示的还是上一轮里已经不存在的那套房。
-        closeSheet();
-        renderResults(); renderConditions();
+        staged.metrics = metrics || [];
       },
       // 说明现在是对话流里的一条普通消息,不需要显隐/折叠那套逻辑了 ——
       // 空的就是空的,零高度,没人看得见。
       token: ({ t }) => { hideSkeleton(); tokens += t; assistantEl.classList.add('streaming'); assistantEl.textContent = tokens; scrollChat(); },
-      answer: ({ answer }) => { state.answer = answer || tokens; assistantEl.classList.remove('streaming'); renderAnswer(assistantEl, state.answer); scrollChat(); },
-      done: ({ params, ranking, count, intent }) => {
+      answer: ({ answer }) => { finalAnswer = answer || tokens; },
+      done: ({ params, ranking, count, intent, notice, batch_offset }) => {
+        params ??= staged.params; ranking ??= staged.ranking; count ??= staged.count; intent ??= staged.intent;
         if (params) state.params = params; if (ranking != null) state.ranking = ranking; if (count != null) state.count = count; if (intent) state.intent = intent;
-        hideSkeleton(); statusEl.remove(); setRunning(false); renderConditions(); renderResultsHead();
+        if (staged.metrics) {
+          state.metrics = staged.metrics; state.pool = staged.pool || staged.metrics;
+          state.offset = batch_offset || 0; state.moreBuf = null; state.selectedId = null; closeSheet();
+        }
+        state.resultNotice = notice || '';
+        hideSkeleton(); statusEl.remove(); setRunning(false); renderConditions();
+        if (staged.metrics) renderResults(); else renderResultsHead();
+        state.answer = finalAnswer || tokens; assistantEl.classList.remove('streaming');
+        renderAnswer(assistantEl, state.answer);
         if (state.intent === 'new_search' || state.intent === 'refine') ensureCondCard();
         scrollChat();
       },
@@ -170,8 +234,7 @@
 
   /** 往对话流里加一条空的助手发言(等着流式写入)。 */
   function addAssistantMsg() {
-    const a = h('div', 'msg-assistant');
-    $('#chat').appendChild(a);
+    const a = addMessage('assistant');
     // 手机上收起来:只有一条滚动流,说明不收就把地图和卡片顶到一千多像素以下。
     // 宽屏不需要 —— 对话是独立一栏、自己滚,再长也不挡别人。
     if (!twoColumn()) {
@@ -181,9 +244,9 @@
         more.textContent = on ? T.expand : T.collapse;
       };
       a.classList.add('clamped');
-      a.addEventListener('click', toggle);
+      a.addEventListener('click', e => { if (!e.target.closest('button, a')) toggle(); });
       more.addEventListener('click', toggle);
-      $('#chat').appendChild(more);
+      a.after(more);
     }
     return a;
   }
@@ -205,21 +268,37 @@
   }
 
   function renderAnswer(el, text) {
+    // 完整响应提交后才保存,此后这条回答的引用永远使用同一份结果。
+    let snapshot = answerSnapshots.get(el);
+    if (!snapshot) {
+      snapshot = snapshotResults(); answerSnapshots.set(el, snapshot);
+      if (snapshot.metrics.length) {
+        const link = h('button', 'msg-results'); link.type = 'button';
+        referenceTargets.set(link, { snapshot });
+        link.addEventListener('click', () => {
+          if (state.running) return;
+          showResultSnapshot(snapshot);
+          $('#results').scrollIntoView({ block: 'start' });
+          const col = $('#results').closest('.col-results'); if (col) scrollTo(col, 0);
+        });
+        el.closest('.msg-main').appendChild(link);
+      }
+    }
     const lines = String(text || '').split('\n').map(s => cleanLine(s)).filter(Boolean);
     const bullets = lines.filter(l => /^[-•·]\s+/.test(l));
     // 认不出结构就整段按原样出(但星号照样要洗掉)
-    if (!bullets.length) { el.textContent = ''; el.appendChild(withRefs(lines.join('\n'))); return; }
+    if (!bullets.length) { el.textContent = ''; el.appendChild(withRefs(lines.join('\n'), snapshot)); refreshRefs(); return; }
     const lead = lines.find(l => !/^[-•·]\s+/.test(l)) || '';
     const rest = lines.filter(l => !/^[-•·]\s+/.test(l) && l !== lead);
     el.textContent = '';
-    if (lead) { const d = h('div', 'msg-lead'); d.appendChild(withRefs(lead)); el.appendChild(d); }
+    if (lead) { const d = h('div', 'msg-lead'); d.appendChild(withRefs(lead, snapshot)); el.appendChild(d); }
     const ul = h('div', 'msg-bullets');
     for (const b of bullets) {
-      const d = h('div', 'msg-bullet'); d.appendChild(withRefs(b.replace(/^[-•·]\s+/, ''))); ul.appendChild(d);
+      const d = h('div', 'msg-bullet'); d.appendChild(withRefs(b.replace(/^[-•·]\s+/, ''), snapshot)); ul.appendChild(d);
     }
     el.appendChild(ul);
     // 模型多写了的段落照样留着,不丢内容
-    for (const r of rest) { const d = h('div', 'msg-extra'); d.appendChild(withRefs(r)); el.appendChild(d); }
+    for (const r of rest) { const d = h('div', 'msg-extra'); d.appendChild(withRefs(r, snapshot)); el.appendChild(d); }
     refreshRefs();   // 说明是在卡片渲染完之后才到的,这里再判一次哪些引用指不到
   }
 
@@ -268,7 +347,7 @@
   }
   const seq = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
 
-  function withRefs(text) {
+  function withRefs(text, snapshot) {
     const frag = document.createDocumentFragment();
     const s = String(text || '');
     let last = 0, m;
@@ -276,7 +355,7 @@
     RE.lastIndex = 0;
     while ((m = RE.exec(s))) {
       if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
-      frag.appendChild(refPhrase(m[0]));
+      frag.appendChild(refPhrase(m[0], snapshot));
       last = m.index + m[0].length;
     }
     if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
@@ -288,24 +367,24 @@
    *    区间「第 5-8 套」—— 整个短语一个按钮,点了把 5~8 全部闪一遍
    *    「前三套」「后两套」—— 同上,号从当前这一批算出来
    *  区间和"前N套"必须整块处理:它们指的是一组,拆开点没有意义。 */
-  function refPhrase(phrase) {
-    // 前 N 套 / 后 N 套 —— 相对**当前这一批**,翻页后自动跟着变
+  function refPhrase(phrase, snapshot) {
+    // 前 N 套 / 后 N 套 —— 相对这条回答保存的批次,不会随当前页面换批而改变。
     const R = refSet();
     let m = R.headtail && phrase.match(R.headtail);
     if (m) {
       const k = toNum(m[2]);
-      const lo = state.offset + 1, hi = state.offset + state.metrics.length;
+      const lo = snapshot.offset + 1, hi = snapshot.offset + snapshot.metrics.length;
       if (k && hi >= lo) {
         const nums = m[1] === '前' ? seq(lo, Math.min(lo + k - 1, hi))
                                    : seq(Math.max(hi - k + 1, lo), hi);
-        return groupRef(phrase, nums);
+        return groupRef(phrase, nums, snapshot);
       }
     }
     // 第 5-8 套 / 第 5 至 8 套
     m = phrase.match(R.range);
     if (m) {
       const a = toNum(m[1]), b = toNum(m[2]);
-      if (a && b && b >= a && b - a <= 20) return groupRef(phrase, seq(a, b));
+      if (a && b && b >= a && b - a <= 20) return groupRef(phrase, seq(a, b), snapshot);
     }
     // 列举:每个号各自可点,顿号和"第""套"保持原样
     const wrap = h('span', 'ref-group');
@@ -315,7 +394,7 @@
     while ((x = NRE.exec(phrase))) {
       const n = toNum(x[0]);
       if (x.index > last) wrap.appendChild(document.createTextNode(phrase.slice(last, x.index)));
-      wrap.appendChild(n ? refBtn(x[0], [n], T.jumpTo(n))
+      wrap.appendChild(n ? refBtn(x[0], [n], T.jumpTo(n), snapshot)
                          : document.createTextNode(x[0]));
       last = x.index + x[0].length;
     }
@@ -324,17 +403,25 @@
   }
 
   /** 整个短语一个按钮,指向一组房源。 */
-  function groupRef(phrase, nums) {
+  function groupRef(phrase, nums, snapshot) {
     const wrap = h('span', 'ref-group');
-    wrap.appendChild(refBtn(phrase, nums, T.jumpRange(nums[0], nums[nums.length - 1])));
+    wrap.appendChild(refBtn(phrase, nums, T.jumpRange(nums[0], nums[nums.length - 1]), snapshot));
     return wrap;
   }
 
-  function refBtn(label, nums, title) {
+  function refBtn(label, nums, title, snapshot) {
     const b = h('button', 'ref', label); b.type = 'button'; b.title = title;
-    // 记下它指向的所有号,换批后用来判断这条引用是不是已经指不到了
+    const targets = nums.map(no => ({ no, id: snapshot.metrics[no - snapshot.offset - 1]?.id }));
+    referenceTargets.set(b, { snapshot, targets, title });
     b.dataset.no = nums.join(',');
-    b.addEventListener('click', () => focusCards(nums));
+    b.dataset.propertyIds = targets.map(t => t.id ?? '').join(',');
+    b.addEventListener('click', e => {
+      e.stopPropagation();
+      if (state.running || targets.some(t => t.id == null)) return;
+      showResultSnapshot(snapshot);
+      // 最后再核对 ID,序号绝不能被另一套房接管。
+      focusCards(targets.filter(t => document.querySelector('.card[data-no="' + t.no + '"]')?.dataset.id === String(t.id)).map(t => t.no));
+    });
     return b;
   }
 
@@ -410,7 +497,9 @@
 
   async function send(text) {
     if (state.running) return;
+    returnToLatest();
     setRunning(true);   // 先上锁再等 meta,否则等待期间连点会发两次
+    state.resultNotice = '';
     await metaReady;
     addUser(text);
     const status = addStatus();
@@ -420,23 +509,76 @@
 
   async function refine(params, statusText) {
     if (state.running) return;
+    returnToLatest();
+    const thread = state.threadId;
     setRunning(true);
     await metaReady;
+    if (thread !== state.threadId) return;
+    const active = new Set((params.abstract_needs || []).map(n => n.attribute));
+    const removed = (state.params?.abstract_needs || []).map(n => n.attribute).filter(a => !active.has(a));
+    params = JSON.parse(JSON.stringify(params));
+    if (removed.includes(params.sort_by)) params.sort_by = null;
+    const previousIds = state.metrics.map(m => m.id);
+    state.resultNotice = statusText || T.statusRefine;
+    renderResultsHead();
     const status = addStatus();
     status.querySelector('.t').textContent = statusText || T.statusRefine;
-    const answerEl = answerHost();   // 已在内部清空并同步显隐
-    await streamPost('/api/refine', { thread_id: state.threadId, params, lang: state.lang }, runHandlers(status, answerEl));
+    const answerEl = answerHost();
+    $('#results').setAttribute('aria-busy', 'true');
+    const staged = { metrics: [], pool: [], tokens: '', answer: '', ranking: '' };
+    // 成功后一次换上,避免新条件套在旧房卡上,或新说明指向旧编号。
+    await streamPost('/api/refine', { thread_id: state.threadId, params, removed_attributes: removed, lang: state.lang }, {
+      node: ({ node }) => { status.querySelector('.t').textContent = T.nodeStatus(T.nodes[node] || node); },
+      ranking: ({ ranking }) => { staged.ranking = ranking || ''; },
+      more: ({ metrics }) => { staged.pool = metrics || []; },
+      results: ({ metrics }) => { staged.metrics = metrics || []; },
+      token: ({ t }) => { staged.tokens += t; },
+      answer: ({ answer }) => { staged.answer = answer || ''; },
+      done: data => {
+        const same = previousIds.length === staged.metrics.length && previousIds.every((id, i) => id === staged.metrics[i].id);
+        Object.assign(state, { params: data.params || params, intent: data.intent || 'refine',
+          ranking: data.ranking ?? staged.ranking, count: data.count ?? staged.metrics.length,
+          metrics: staged.metrics, pool: staged.pool.length ? staged.pool : staged.metrics,
+          moreBuf: null, offset: data.batch_offset || 0, selectedId: null, answer: staged.answer || staged.tokens,
+          resultNotice: data.notice || (same ? T.resultsUnchanged : T.resultsUpdated) });
+        hideSkeleton(); status.remove(); setRunning(false); closeSheet();
+        $('#results').removeAttribute('aria-busy');
+        renderConditions(); renderResults(); renderAnswer(answerEl, state.answer); scrollChat();
+      },
+      error: ({ message, rollback_failed }) => {
+        hideSkeleton(); status.remove(); answerEl.closest('.msg-row').remove(); setRunning(false);
+        $('#results').removeAttribute('aria-busy');
+        state.resultNotice = rollback_failed ? T.refineRecoveryFailed : T.refineFailed;
+        renderConditions(); renderResultsHead();
+        const e = h('div', 'msg-error'); e.appendChild(h('span', null, state.resultNotice));
+        const retry = h('button', 'btn small', T.retry); retry.type = 'button';
+        retry.addEventListener('click', () => { if (state.running) return; e.remove(); refine(params, statusText); });
+        e.appendChild(retry); e.title = message || ''; $('#chat').appendChild(e); scrollChat();
+      },
+    });
   }
 
-  function setRunning(v) { state.running = v; $('#composer button').disabled = v; }
+  function setRunning(v) {
+    state.running = v; $('#composer .send').disabled = v;
+    document.querySelectorAll('#condition-dock .chip button').forEach(el => { el.disabled = v; });
+    const sort = $('#result-sort'); if (sort) sort.disabled = v || !!state.historyView;
+    document.querySelectorAll('.more-batch button').forEach(el => { el.disabled = v; });
+    refreshRefs();
+  }
 
   // ---------------------------------------------------------------- 条件卡
   function chip(label, opts = {}) {
-    const c = h('button', 'chip' + (opts.cls ? ' ' + opts.cls : '')); c.type = 'button';
-    const s = h('span', null, label); c.appendChild(s);
-    if (opts.editable) { const p = h('span'); p.innerHTML = PENCIL; p.style.opacity = '.55'; c.appendChild(p); }
-    if (opts.onRemove) { const x = h('span', 'x'); x.innerHTML = X; x.title = T.remove; x.addEventListener('click', ev => { ev.stopPropagation(); opts.onRemove(); }); c.appendChild(x); }
-    if (opts.onClick) c.addEventListener('click', opts.onClick);
+    const c = h('div', 'chip' + (opts.cls ? ' ' + opts.cls : ''));
+    const main = h(opts.onClick ? 'button' : 'span', 'chip-main');
+    const icon = h('span', 'chip-icon'); icon.innerHTML = categoryIcon(opts.icon);
+    main.append(icon, h('span', 'chip-text', label)); main.title = label;
+    if (opts.onClick) { main.type = 'button'; main.disabled = state.running; main.addEventListener('click', opts.onClick); }
+    c.appendChild(main);
+    if (opts.onRemove) {
+      const x = h('button', 'chip-remove'); x.type = 'button'; x.innerHTML = X;
+      x.setAttribute('aria-label', T.remove + ' ' + label); x.title = T.remove; x.disabled = state.running;
+      x.addEventListener('click', opts.onRemove); c.appendChild(x);
+    }
     return c;
   }
 
@@ -444,83 +586,120 @@
     const p = state.params; if (!p) return;
     const card = ensureCondCard(); card.innerHTML = '';
     const meta = state.meta;
-    const apply = mut => { const next = JSON.parse(JSON.stringify(state.params)); mut(next); state.params = next; refine(next); };
+    const apply = (mut, statusText) => { if (state.running) return; const next = JSON.parse(JSON.stringify(state.params)); mut(next); refine(next, statusText); };
 
-    const head = h('div', 'cond-head'); head.innerHTML = T.condHead; card.appendChild(head);
+    card.classList.toggle('is-editing', editingConditions);
+    const head = h('div', 'cond-head'); head.appendChild(h('strong', null, T.condHead));
+    const edit = h('button', 'cond-edit', editingConditions ? T.closeConditions : T.editConditions); edit.type = 'button';
+    edit.setAttribute('aria-expanded', String(editingConditions)); edit.setAttribute('aria-controls', 'condition-options');
+    edit.addEventListener('click', () => { editingConditions = !editingConditions; renderConditions(); card.querySelector('.cond-edit').focus({ preventScroll: true }); });
+    head.appendChild(edit); card.appendChild(head);
+    const legend = h('div', 'cond-legend');
+    legend.append(h('span', 'legend-required', T.requiredShort), h('span', 'legend-preferred', T.preferredShort));
+    card.appendChild(legend);
+    const options = h('div', 'condition-options'); options.id = 'condition-options'; card.appendChild(options);
 
     // ---- 必须(硬条件,进 SQL)----
-    const g1 = h('div', 'cond-group'); g1.appendChild(h('div', 'cond-label', T.mustLabel));
+    const g1 = h('div', 'cond-group cond-required'); g1.title = T.mustLabel;
+    g1.appendChild(h('div', 'cond-label', T.requiredShort));
     const c1 = h('div', 'chips');
     const numChip = (key, label, fmt, unitHint) => {
       const v = p[key];
-      if (v == null) c1.appendChild(chip(T.unset(label), { cls: 'unset', onClick: () => editNumber(label, v, unitHint, val => apply(n => { n[key] = val; })) }));
-      else c1.appendChild(chip(fmt(v), { cls: 'hard', editable: true, onClick: () => editNumber(label, v, unitHint, val => apply(n => { n[key] = val; })), onRemove: () => apply(n => { n[key] = null; }) }));
+      const icon = key.includes('price') ? 'budget' : 'rooms';
+      if (v == null) c1.appendChild(chip(T.unset(label), { icon, cls: 'unset', onClick: () => editNumber(label, v, unitHint, val => apply(n => { n[key] = val; })) }));
+      else c1.appendChild(chip(fmt(v), { icon, cls: 'hard', onClick: () => editNumber(label, v, unitHint, val => apply(n => { n[key] = val; })), onRemove: () => apply(n => { n[key] = null; }) }));
     };
     numChip('max_price', T.budgetMax, v => '≤ ' + money(v), T.aud);
     if (p.min_price != null) numChip('min_price', T.budgetMin, v => '≥ ' + money(v), T.aud);
     numChip('bedrooms', T.bedroomsLabel, v => T.beds(v), T.roomsUnit);
     if (p.bathrooms != null) numChip('bathrooms', T.bathroomsLabel, v => T.baths(v), T.roomsUnit);
-    if (p.property_type) c1.appendChild(chip(ptZh(p.property_type), { cls: 'hard', editable: true, onClick: () => editSelect(T.typeLabel, p.property_type, meta.property_types, val => apply(n => { n.property_type = val; })), onRemove: () => apply(n => { n.property_type = null; }) }));
-    else c1.appendChild(chip(T.typeAny, { cls: 'unset', onClick: () => editSelect(T.typeLabel, '', meta.property_types, val => apply(n => { n.property_type = val || null; })) }));
-    if (p.suburb) c1.appendChild(chip(p.suburb, { cls: 'hard', editable: true, onClick: () => editText(T.suburbLabel, p.suburb, val => apply(n => { n.suburb = val || null; })), onRemove: () => apply(n => { n.suburb = null; }) }));
-    else c1.appendChild(chip(T.suburbAny, { cls: 'unset', onClick: () => editText(T.suburbLabel, '', val => apply(n => { n.suburb = val || null; })) }));
-    g1.appendChild(c1); card.appendChild(g1);
+    if (p.property_type) c1.appendChild(chip(ptZh(p.property_type), { icon: 'home', cls: 'hard', onClick: () => editSelect(T.typeLabel, p.property_type, meta.property_types, val => apply(n => { n.property_type = val; })), onRemove: () => apply(n => { n.property_type = null; }) }));
+    else c1.appendChild(chip(T.typeAny, { icon: 'home', cls: 'unset', onClick: () => editSelect(T.typeLabel, '', meta.property_types, val => apply(n => { n.property_type = val || null; })) }));
+    if (p.suburb) c1.appendChild(chip(p.suburb, { icon: 'location', cls: 'hard', onClick: () => editText(T.suburbLabel, p.suburb, val => apply(n => { n.suburb = val || null; })), onRemove: () => apply(n => { n.suburb = null; }) }));
+    else c1.appendChild(chip(T.suburbAny, { icon: 'location', cls: 'unset', onClick: () => editText(T.suburbLabel, '', val => apply(n => { n.suburb = val || null; })) }));
+    g1.classList.toggle('no-active', !c1.querySelector('.hard'));
+    g1.appendChild(c1); options.appendChild(g1);
 
-    // ---- 希望(软条件,满足不了会说明并放弃)----
-    const g2 = h('div', 'cond-group'); g2.appendChild(h('div', 'cond-label', T.wishLabel));
+    // ---- 偏好条件:无交集时说明取舍,不自动删除----
+    const g2 = h('div', 'cond-group cond-preferred'); g2.title = T.wishLabel;
+    g2.appendChild(h('div', 'cond-label', T.preferredShort));
     const c2 = h('div', 'chips'); let soft = 0;
-    (p.abstract_needs || []).forEach((need, i) => { soft++; c2.appendChild(chip(T.scoreChip(attrZh(need.attribute), need.min_score), { editable: true,
-      onClick: () => editNumber(T.minScoreTitle(attrZh(need.attribute)), need.min_score, T.points, val => apply(n => { n.abstract_needs[i].min_score = Math.max(0, Math.min(100, val)); })),
-      onRemove: () => apply(n => { n.abstract_needs.splice(i, 1); }) })); });
-    (p.amenity_needs || []).forEach((need, i) => { soft++; c2.appendChild(chip(T.distChip(kindZh(need.kind), dist(need.max_distance_m)), { editable: true,
+    (p.abstract_needs || []).forEach((need, i) => {
+      const required = need.strength === 'required'; if (!required) soft++;
+      const score = chip(T.scoreChip(attrZh(need.attribute), need.min_score, scoreSymbol(need.operator)), {
+        cls: required ? 'hard' : '',
+        onClick: () => editScore(need, (op, score) => apply(n => {
+          Object.assign(n.abstract_needs[i], { operator: op, min_score: score, value_source: 'explicit' });
+          n.relative_preferences = (n.relative_preferences || []).filter(g => g.field !== need.attribute);
+        })),
+        onRemove: () => apply(n => { n.abstract_needs.splice(i, 1); }, T.removingPreference(attrZh(need.attribute))) });
+      score.title = need.value_source === 'inferred' ? T.inferredScore : T.relativeScoreOrigin;
+      (required ? c1 : c2).appendChild(score);
+    });
+    g1.classList.toggle('no-active', !c1.querySelector('.hard'));
+    (p.amenity_needs || []).forEach((need, i) => { soft++; c2.appendChild(chip(T.distChip(kindZh(need.kind), dist(need.max_distance_m)), { icon: 'location',
       onClick: () => editNumber(T.distTitle(kindZh(need.kind)), need.max_distance_m, T.metres, val => apply(n => { n.amenity_needs[i].max_distance_m = val; })),
       onRemove: () => apply(n => { n.amenity_needs.splice(i, 1); }) })); });
-    if (p.near_place) { soft++; const np = p.near_place; c2.appendChild(chip(T.nearPlaceChip(np.name, np.max_distance_m ? dist(np.max_distance_m) : ''), { editable: true,
+    if (p.near_place) { soft++; const np = p.near_place; c2.appendChild(chip(T.nearPlaceChip(np.name, np.max_distance_m ? dist(np.max_distance_m) : ''), { icon: 'location',
       onClick: () => editNumber(T.nearPlaceTitle(np.name), np.max_distance_m, T.metres, val => apply(n => { n.near_place.max_distance_m = val || null; })),
       onRemove: () => apply(n => { n.near_place = null; if (n.sort_by === 'near_place_distance') n.sort_by = null; }) })); }
-    if (p.school_zone) { soft++; c2.appendChild(chip(T.schoolZoneChip(p.school_zone.school), { onRemove: () => apply(n => { n.school_zone = null; }) })); }
+    if (p.school_zone) { soft++; c2.appendChild(chip(T.schoolZoneChip(p.school_zone.school), { icon: 'location', onRemove: () => apply(n => { n.school_zone = null; }) })); }
     (p.planning_needs || []).forEach((need, i) => { soft++; c2.appendChild(chip(meta.planning_needs[need] || need, { onRemove: () => apply(n => { n.planning_needs.splice(i, 1); }) })); });
-    if (p.min_gross_yield != null) { soft++; c2.appendChild(chip(T.yieldChip(pct(p.min_gross_yield)), { editable: true,
+    if (p.min_gross_yield != null) { soft++; c2.appendChild(chip(T.yieldChip(pct(p.min_gross_yield)), { icon: 'budget',
       onClick: () => editNumber(T.yieldTitle, p.min_gross_yield * 100, '%', val => apply(n => { n.min_gross_yield = val / 100; })),
       onRemove: () => apply(n => { n.min_gross_yield = null; }) })); }
     if (!soft) c2.appendChild(h('div', 'cond-unsupported', T.noSoft));
-    g2.appendChild(c2); card.appendChild(g2);
+    g2.classList.toggle('no-active', !soft);
+    g2.appendChild(c2); options.appendChild(g2);
+    if (p.relative_preferences?.length) {
+      const adjustments = h('div', 'cond-adjustments'); adjustments.appendChild(h('span', 'cond-adjustments-label', T.adjustmentLabel));
+      const items = h('div', 'chips');
+      p.relative_preferences.forEach((goal, i) => {
+        const label = meta.attributes[goal.field] || (goal.field === 'price' ? T.relativePrice : meta.sort_labels[goal.field]) || goal.field;
+        const item = chip(T.relativeGoal(label, goal.direction, goal.degree), { cls: 'relative-goal',
+          onRemove: () => apply(n => { n.relative_preferences.splice(i, 1); }) });
+        item.title = T.relativeGoalHint; items.appendChild(item);
+      });
+      adjustments.appendChild(items); options.appendChild(adjustments);
+    }
+    if (!c1.querySelector('.hard') && !soft) options.appendChild(h('div', 'cond-hint', T.noFilters));
 
-    // ---- 排序 ----
-    const g3 = h('div', 'cond-group'); g3.appendChild(h('div', 'cond-label', T.sortGroup));
-    const c3 = h('div', 'chips'); const sc = h('div', 'chip sort');
-    const sel = h('select');
-    const opts = [['', T.sortDefault], ...Object.entries(meta.sort_labels)];
-    for (const [k, v] of opts) { const o = h('option', null, v); o.value = k; if ((p.sort_by || '') === k) o.selected = true; sel.appendChild(o); }
-    sel.addEventListener('change', () => apply(n => { n.sort_by = sel.value || null; }));
-    sc.appendChild(sel); c3.appendChild(sc); g3.appendChild(c3); card.appendChild(g3);
+    const add = h('button', 'cond-add'); add.type = 'button';
+    const plus = h('span', null, '+'); plus.setAttribute('aria-hidden', 'true'); add.append(plus, document.createTextNode(T.addCondition));
+    add.addEventListener('click', () => { $('#input').focus(); }); card.appendChild(add);
 
     if (p.unsupported_asks && p.unsupported_asks.length) card.appendChild(h('div', 'cond-unsupported', T.unsupportedNote(p.unsupported_asks.map(a => (meta.unsupported_key || {})[a] || a))));
-    if (p._conflict) card.appendChild(h('div', 'cond-unsupported', T.conflictNote(attrZh(p._conflict))));
 
     if (state.count || state.metrics.length) {
       const st = h('div', 'cond-status');
       st.appendChild(h('span', null, state.metrics.length ? T.foundN(state.metrics.length) : T.foundNone));
-      if (state.metrics.length) { const b = h('button', 'btn small', T.seeResults); b.type = 'button'; b.addEventListener('click', () => $('#results').scrollIntoView({ behavior: 'smooth', block: 'start' })); st.appendChild(b); }
+      if (state.metrics.length) { const b = h('button', 'btn small', T.seeResults); b.type = 'button'; b.addEventListener('click', () => { returnToLatest(); $('#results').scrollIntoView({ behavior: 'smooth', block: 'start' }); }); st.appendChild(b); }
       card.appendChild(st);
     }
   }
 
   // ---- 小编辑框 ----
-  function openPopover(title, fields, onApply, hint) {
+  function openPopover(title, fields, onApply, hint, cssClass = '') {
     const pop = $('#popover'); pop.innerHTML = ''; pop.appendChild(h('h4', null, title));
+    pop.classList.toggle('score-editor', cssClass === 'score-editor');
+    pop.setAttribute('role', 'dialog'); pop.setAttribute('aria-modal', 'true'); pop.setAttribute('aria-label', title);
     const inputs = [];
     for (const f of fields) {
       const lab = h('label'); lab.appendChild(h('span', null, f.label));
       let inp;
       if (f.type === 'select') { inp = h('select'); for (const [k, v] of Object.entries(f.options)) { const o = h('option', null, v); o.value = k; if (k === f.value) o.selected = true; inp.appendChild(o); } if (f.allowEmpty) { const o = h('option', null, T.any); o.value = ''; if (!f.value) o.selected = true; inp.prepend(o); } }
       else { inp = h('input'); inp.type = f.type || 'text'; if (f.value != null) inp.value = f.value; if (f.type === 'number') { inp.inputMode = 'decimal'; inp.step = 'any'; } }
+      for (const key of ['min', 'max', 'step', 'required']) if (f[key] != null) inp[key] = f[key];
       lab.appendChild(inp); pop.appendChild(lab); inputs.push(inp);
     }
     if (hint) pop.appendChild(h('div', 'hint', hint));
     const act = h('div', 'actions'); const left = h('div'); const right = h('div', 'right');
     const cancel = h('button', 'btn ghost small', T.cancel); cancel.type = 'button'; cancel.addEventListener('click', closePopover);
-    const ok = h('button', 'btn small', T.apply); ok.type = 'button'; ok.addEventListener('click', () => { closePopover(); onApply(inputs.map(i => i.value)); });
+    const ok = h('button', 'btn small', T.apply); ok.type = 'button'; ok.addEventListener('click', () => {
+      const invalid = inputs.find(i => !i.checkValidity());
+      if (invalid) { invalid.reportValidity(); return; }
+      closePopover(); onApply(inputs.map(i => i.value));
+    });
     right.appendChild(cancel); right.appendChild(ok); act.appendChild(left); act.appendChild(right); pop.appendChild(act);
     pop.classList.add('is-open'); $('#backdrop').classList.add('is-open');
     $('#backdrop').onclick = closePopover;
@@ -529,30 +708,62 @@
   }
   function closePopover() { $('#popover').classList.remove('is-open'); if (!$('#detail').classList.contains('open')) $('#backdrop').classList.remove('is-open'); }
   function editNumber(title, value, unit, cb) { openPopover(title, [{ label: unit, type: 'number', value }], ([v]) => { const n = parseFloat(v); if (!isNaN(n) && n > 0) cb(n); else if (v === '') cb(null); }); }
+  const scoreSymbol = op => ({ gte: '≥', gt: '>', lte: '≤', lt: '<', eq: '=' }[op] || '≥');
+  function editScore(need, cb) {
+    openPopover(T.scoreTitle(attrZh(need.attribute)), [
+      { label: T.scoreComparison, type: 'select', value: need.operator || 'gte', options: T.scoreOperators },
+      { label: T.scoreValue, type: 'number', value: need.min_score, min: 0, max: 100, step: 1, required: true },
+    ], ([op, value]) => cb(op, Number(value)), T.scoreHint, 'score-editor');
+  }
   function editText(title, value, cb) { openPopover(title, [{ label: '', type: 'text', value }], ([v]) => cb(v.trim())); }
   function editSelect(title, value, options, cb) { openPopover(title, [{ label: '', type: 'select', value, options, allowEmpty: true }], ([v]) => cb(v)); }
 
   // ---------------------------------------------------------------- 结果区
-  function sortLabel() { const s = state.params && state.params.sort_by; return s ? (state.meta.sort_labels[s] || s) : T.byRelevance; }
-
   function renderResultsHead() {
     const r = $('#results');
+    const view = resultView();
+    $('#results-history')?.remove();
+    if (state.historyView) {
+      const banner = h('div', 'results-history'); banner.id = 'results-history'; banner.setAttribute('role', 'status');
+      const text = h('div');
+      const time = view.createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      text.append(h('strong', null, T.historyTitle(time)), h('div', 'history-note', T.historyNote));
+      const back = h('button', 'btn small', T.returnLatest); back.type = 'button';
+      back.addEventListener('click', returnToLatest); banner.append(text, back); r.prepend(banner);
+    }
     let head = $('#res-head'); if (!head) { head = h('div', 'res-head'); head.id = 'res-head'; r.prepend(head); }
     head.innerHTML = '';
     // 翻过页就要说清楚现在看的是第几到第几套,否则用户不知道自己在哪一批
-    const range = state.offset > 0
-      ? T.range(state.offset + 1, state.offset + state.metrics.length)
-      : T.count(state.metrics.length);
-    const left = h('div'); left.appendChild(h('div', 'res-title', state.metrics.length ? range + ' · ' + sortLabel() : (state.count === 0 && state.ranking ? T.noResultsTitle : T.resultsTitle)));
+    const range = view.offset > 0
+      ? T.range(view.offset + 1, view.offset + view.metrics.length)
+      : T.count(view.metrics.length);
+    const left = h('div'); left.appendChild(h('div', 'res-title', view.metrics.length ? range : (view.count === 0 && view.ranking ? T.noResultsTitle : T.resultsTitle)));
     head.appendChild(left);
+    if (view.params && state.meta) {
+      const label = h('label', 'result-sort'); label.appendChild(h('span', null, T.sortGroup));
+      const select = h('select'); select.id = 'result-sort'; select.disabled = state.running || !!state.historyView;
+      if (state.historyView) select.title = T.historySort;
+      for (const [key, text] of [['', view.params.relative_preferences?.length ? T.relativeSort : T.sortDefault], ...Object.entries(state.meta.sort_labels)]) {
+        const option = h('option', null, text); option.value = key; option.selected = (view.params.sort_by || '') === key; select.appendChild(option);
+      }
+      select.addEventListener('change', () => {
+        const value = select.value; select.value = state.params.sort_by || '';
+        refine({ ...state.params, sort_by: value || null, relative_preferences: null }, T.statusSort);
+      });
+      label.appendChild(select); head.appendChild(label);
+    }
+    let notice = $('#results-notice');
+    if (!notice) { notice = h('div', 'results-notice'); notice.id = 'results-notice'; notice.setAttribute('role', 'status'); head.after(notice); }
+    notice.textContent = state.historyView ? '' : state.resultNotice; notice.hidden = !notice.textContent;
     // 「列表/地图」切换已经去掉 —— 地图现在是常驻的一栏,不需要切换才能看见
     let notes = $('#res-notes'); if (!notes) { notes = h('div', 'res-notes'); notes.id = 'res-notes'; head.after(notes); }
     notes.innerHTML = '';
-    for (const n of (state.ranking || '').split(';').map(s => s.trim()).filter(Boolean)) notes.appendChild(h('div', null, n));
+    for (const n of (view.ranking || '').split(';').map(s => s.trim()).filter(Boolean)) notes.appendChild(h('div', null, n));
   }
 
   function headline(m) {
-    const s = state.params && state.params.sort_by; const meta = state.meta;
+    const p = resultView().params || {};
+    const s = p.relative_preferences?.[0]?.field || p.sort_by; const meta = state.meta;
     if (s && meta.attributes[s] && m.context_scores && m.context_scores[s] != null) {
       return { v: m.context_scores[s], l: T.attrDegree(attrZh(s)), cls: '', sub: evidenceLine(m, s, 2) };
     }
@@ -566,9 +777,9 @@
   /** 用户点名要的、但不是排序依据的那些属性 —— 返回 [中文名, 分数, 属性键]。
    *  排序那个属性不在里面:它是右上角的大数字,不重复。 */
   function otherScores(m) {
-    const p = state.params || {}, s = p.sort_by, out = [];
-    for (const need of (p.abstract_needs || [])) {
-      const a = need.attribute;
+    const p = resultView().params || {}, s = p.relative_preferences?.[0]?.field || p.sort_by, out = [];
+    const attrs = new Set([...(p.abstract_needs || []).map(n => n.attribute), ...(p.relative_preferences || []).map(g => g.field)]);
+    for (const a of attrs) {
       if (a === s) continue;
       const sc = m.context_scores && m.context_scores[a];
       if (sc == null) continue;
@@ -647,7 +858,7 @@
    *  risk 单独一行、永远显示 —— 买家没问不等于不该知道,如实披露是这个系统的立论,
    *  不能因为"他没问"就藏起来。降级不删除。 */
   function badges(m) {
-    const p = state.params || {}; const s = p.sort_by;
+    const p = resultView().params || {}; const s = p.sort_by;
     const asked = [], risk = [], extra = [];
 
     // 1. 抽象需求(热闹/购物方便/安静……),按用户说的顺序。
@@ -690,20 +901,22 @@
 
   function renderResults() {
     const r = $('#results');
+    const view = resultView();
     renderResultsHead();
-    const keep = new Set(['res-head', 'res-notes']);   // 说明已经搬回对话流,这里只剩标题和口径注脚
+    const keep = new Set(['res-head', 'res-notes', 'results-notice', 'results-history']);
     for (const el of [...r.children]) if (!keep.has(el.id)) el.remove();
     renderMap();
-    if (!state.metrics.length) { if (state.count === 0 && state.ranking) r.appendChild(h('div', 'empty', T.emptyMsg)); return; }
+    if (!view.metrics.length) { if (view.count === 0 && view.ranking) r.appendChild(h('div', 'empty', T.emptyMsg)); refreshRefs(); return; }
     // 错峰 45ms 依次浮起。封顶 8 个,否则长列表的尾巴要等将近一秒才出齐 ——
     // 错峰是装饰,不能让它拖慢"结果已经到了"这件事本身。
     let idx = 0;
-    for (const m of state.metrics) {
+    for (const m of view.metrics) {
       // 号在翻页时**继续往下数**(第二批是 6–10),不从 1 重来 ——
       // 从 1 重来的话,对话里旧的「第 3 套」会指到一套完全不同的房子,
       // 那比指不到还糟。指不到是明摆着的,指错是悄悄的。
-      const no = state.offset + idx + 1;
+      const no = view.offset + idx + 1;
       const c = h('div', 'card' + (m.id === state.selectedId ? ' selected' : '')); c.dataset.id = m.id;
+      c.classList.toggle('has-relative', !!view.params?.relative_preferences?.length);
       c.dataset.no = no;
       c.style.setProperty('--d', Math.min(idx++, 8) * 45 + 'ms');
       const top = h('div', 'card-top'); const id = h('div', 'card-id');
@@ -741,25 +954,29 @@
         c.appendChild(rs);
       }
       c.addEventListener('click', () => openDetail(m));
+      if (window.nwFav) c.appendChild(window.nwFav.button(m));   // 右下角收藏(favorites.js)
       r.appendChild(c);
     }
     renderMoreBtn(r);
     refreshRefs();
   }
 
-  /** 「换一批」。翻的是**已经算好**的第 6 名往后 —— 不调 LLM、不查库、不重算指标。
+  /** 「换一批」。翻的是**已经算好**的第 6 名往后,不查库、不重算指标;后续调用 LLM 重写说明。
    *  翻完了就说翻完了,并且提示改条件比继续翻更有用。 */
   function renderMoreBtn(r) {
+    if (state.historyView) return;
     const left = state.pool.length - (state.offset + state.metrics.length);
     if (state.pool.length <= state.metrics.length) return;    // 本来就只有这几套
     const box = h('div', 'more-batch');
     if (left > 0) {
       const b = h('button', 'btn ghost small', T.nextBatch(left)); b.type = 'button';
+      b.disabled = state.running;
       b.addEventListener('click', nextBatch);
       box.appendChild(b);
     } else {
       const b = h('button', 'btn ghost small', T.backToFirst); b.type = 'button';
-      b.addEventListener('click', () => { state.offset = -state.metrics.length; nextBatch(); });
+      b.disabled = state.running;
+      b.addEventListener('click', () => { if (state.running) return; state.offset = -state.metrics.length; nextBatch(); });
       box.appendChild(b);
       box.appendChild(h('div', 'more-note', T.batchDone));
     }
@@ -767,7 +984,7 @@
   }
 
   async function nextBatch() {
-    if (state.running) return;
+    if (state.running || state.historyView) return;
     const next = state.offset + state.metrics.length;
     state.offset = next >= state.pool.length ? 0 : next;
     state.metrics = state.pool.slice(state.offset, state.offset + 5);
@@ -789,34 +1006,50 @@
                      runHandlers(status, a));
   }
 
-  /** 换批之后,对话里旧的「第 N 套」可能已经不在页面上了。
-   *  把它们降成普通文字 —— **留着一个点了没反应的按钮比没有按钮更糟**。 */
+  /** 引用有效性由当轮保存的 ID 决定,不再拿当前的 1–5 判断旧引用。 */
   function refreshRefs() {
-    for (const b of document.querySelectorAll('.ref')) {
-      // data-no 可能是一组("6,7,8")。只要还有一套在当前批里,这条引用就仍然有用。
-      const nums = String(b.dataset.no || '').split(',').map(Number).filter(Boolean);
-      b.classList.toggle('stale', !nums.some(cardExists));
+    const currentKey = resultKey(resultView()), latestKey = resultKey(state);
+    for (const b of document.querySelectorAll('.ref, .msg-results')) {
+      const binding = referenceTargets.get(b); if (!binding) continue;
+      const { snapshot, targets, title } = binding;
+      const valid = !targets || targets.every(t => t.id != null);
+      b.disabled = state.running || !valid;
+      b.classList.toggle('stale', !valid);
+      if (targets) {
+        b.title = !valid ? T.referenceUnavailable : (snapshot.key !== currentKey ? T.viewHistorical + ' · ' : '') + title;
+      } else {
+        const viewing = !!state.historyView && snapshot === state.historyView;
+        b.textContent = viewing ? T.viewingHistorical : snapshot.key === latestKey ? T.currentResults : T.viewHistorical;
+        b.setAttribute('aria-pressed', String(viewing));
+        b.closest('.msg-row').classList.toggle('viewing-history', viewing);
+      }
     }
   }
 
   /** 地图现在是常驻的一栏(不再是「列表/地图」二选一),每次有新结果就重画。 */
   function renderMap() {
     const box = $('#map'); if (!box) return;
+    const view = resultView();
+    clearTimeout(state.focusTimer); state.focusTimer = null;
     // Leaflet 不能在同一节点上初始化两次。观察器也要一起断开 ——
     // 下面有两条提前 return 的路径,留在那儿会盯着一张已经拆掉的地图。
     if (state.map) { state.map.remove(); state.map = null; }
     if (state.mapRO) { state.mapRO.disconnect(); state.mapRO = null; }
-    blotMarker = null; state.pins = [];   // 地图拆了,颜料和图钉的引用也跟着作废
+    state.pins = []; state.mapFit = null;   // 地图拆了,图钉和「显示全部」的引用也跟着作废
     state.measure = null;                 // 测距那一层也随地图一起没了
     box.innerHTML = '';
+    setMapCount(view.metrics.length);
     if (typeof L === 'undefined') { box.innerHTML = '<div class="map-empty"></div>'; box.firstChild.textContent = T.mapOffline; return; }
-    const pts = state.metrics.filter(m => m.latitude != null && m.longitude != null);
+    const pts = view.metrics.filter(m => m.latitude != null && m.longitude != null);
     if (!pts.length) { box.innerHTML = '<div class="map-empty"></div>'; box.firstChild.textContent = T.mapNoCoords; return; }
 
     // attributionControl 关掉 —— 署名自己画在右下角(index.html),
     // 免得被边缘渐隐糊掉。ODbL 要求署名可见,这是法律要求。
-    const map = L.map(box, { zoomControl: true, attributionControl: false });
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map);
+    // 历史回看可在点击图钉后立即替换地图。Leaflet 的延迟缩放回调会访问已拆除
+    // 的图层;这里直接完成缩放,保留拖拽/平移,避免旧地图动画跨过结果切换。
+    // 缩放按钮是面板自己画的毛玻璃竖条(index.html .map-ctl),Leaflet 自带的关掉。
+    const map = L.map(box, { zoomControl: false, attributionControl: false, zoomAnimation: false });
+    addBasemap(map);
     const group = [];
     const pins = [];
     // 同一栋楼的不同单元坐标几乎重合(实测两个单元只差 2.6 米),图钉会叠在一起 ——
@@ -838,7 +1071,7 @@
       //   · 不能用 pts 的下标 —— pts 过滤掉了没坐标的房源,缺一套就整体错位,
       //     而且只在缺坐标时才出错,极难发现。
       //   · 必须加 offset —— 换一批之后卡片是 6–10,只算批内下标会得到 1–5。
-      const no = state.offset + state.metrics.indexOf(m) + 1;
+      const no = view.offset + view.metrics.indexOf(m) + 1;
       // 图钉:**尖端对准坐标,号码浮在上方**。
       // 原来是个直径 20 的圆点扣在坐标正中央 —— 而坐标那一点正是要看的东西
       // (门牌号、这栋楼本身),等于用标记盖住了它要标记的对象。
@@ -867,10 +1100,15 @@
     const fit = () => {
       if (!box.clientWidth || !box.clientHeight) return;   // 容器还没尺寸,取景必错
       map.invalidateSize();
-      map.fitBounds(group, { padding: [56, 56], maxZoom: 14 });
+      // 结果切换可能很快再次销毁地图,初次取景不启动延迟缩放动画。
+      // 内边距 = 磨砂圈宽度(左边最厚):房源落在中间通透的那块,不压进边上的磨砂和上下两行字;右边还有控制条。
+      map.fitBounds(group, { paddingTopLeft: [170, 96], paddingBottomRight: [96, 104], maxZoom: 14, animate: false });
     };
     fit();
     state.map = map;
+    // 面板上沿的坐标跟着地图中心走
+    const coord = () => { const c = map.getCenter(), e = $('#map-coord'); if (e) e.textContent = c.lat.toFixed(4) + ', ' + c.lng.toFixed(4); };
+    map.on('move', coord); coord();
 
     // 谁在控制视野:用户一旦自己拖过/滚过,就不再自动取景 ——
     // 否则他放大看某一片,栏宽一变就被拽回全局。
@@ -878,6 +1116,13 @@
     const mark = () => { userTook = true; };
     box.addEventListener('pointerdown', mark, { passive: true });
     box.addEventListener('wheel', mark, { passive: true });
+    // 「显示全部」= 交还取景权并重新框住这一批;放大/缩小算用户接管。
+    state.mapFit = () => { userTook = false; fit(); };
+    state.mapTook = mark;
+    map.on('unload', () => {
+      box.removeEventListener('pointerdown', mark);
+      box.removeEventListener('wheel', mark);
+    });
 
     // Leaflet 不会自己发现容器尺寸变了,只会留下一片灰、或者只画出两块瓦片。
     // 用 ResizeObserver 而不是 window.resize:栏宽变化不一定伴随窗口变化
@@ -888,6 +1133,7 @@
     // 地图就停在那个算歪的缩放上(实测显示成整个维州加塔斯马尼亚)。
     // 现在改成:只要用户还没接管,尺寸每变一次就重新取一次景。
     state.mapRO = new ResizeObserver(() => {
+      if (state.map !== map) return;
       map.invalidateSize();
       if (!userTook) fit();
     });
@@ -897,47 +1143,7 @@
   // ---------------------------------------------------------------- 详情
   function kv(k, v, cls, s) { const e = h('div', 'kv'); e.appendChild(h('div', 'k', k)); const vv = h('div', 'v' + (cls ? ' ' + cls : '')); vv.textContent = v; e.appendChild(vv); if (s) e.appendChild(h('div', 's', s)); return e; }
   // ---------------------------------------------------------------- 点卡片 → 地图跟过去
-  /** 黄色颜料滴在纸上化开的形状。
-   *  用 feTurbulence 生成噪声,再用 feDisplacementMap 把圆形的边"推乱" ——
-   *  这样每一处边缘都不规则,不是那种一眼假的椭圆。
-   *  两层圆:实心的核 + 更淡的晕,像颜料往纸纤维里渗。
-   *  mix-blend-mode: multiply + 0.55 不透明度 —— 底下的路名、街区必须还看得清,
-   *  它是标记不是遮罩。 */
-  const BLOT_SVG =
-    '<svg class="blot" width="190" height="190" viewBox="0 0 190 190" aria-hidden="true">' +
-    '<defs><filter id="blotf" x="-45%" y="-45%" width="190%" height="190%">' +
-    '<feTurbulence type="fractalNoise" baseFrequency="0.026" numOctaves="4" seed="11" result="n"/>' +
-    '<feDisplacementMap in="SourceGraphic" in2="n" scale="46" xChannelSelector="R" yChannelSelector="G"/>' +
-    '</filter></defs><g filter="url(#blotf)">' +
-    '<circle cx="95" cy="95" r="34" fill="#E9B949"/>' +
-    '<circle cx="95" cy="95" r="50" fill="#E9B949" opacity=".40"/>' +
-    '</g></svg>';
-
-  let blotMarker = null;
-
-  function dropBlot(map, ll) {
-    // 自建图层,z-index 压在标记圆点(overlayPane 400)之下、瓦片(200)之上。
-    // 不这么做的话 divIcon 会进 markerPane(600),把编号圆点整个盖住。
-    if (!map.getPane('blot')) {
-      const p = map.createPane('blot');
-      p.style.zIndex = 350;
-      p.style.pointerEvents = 'none';
-    }
-    if (blotMarker) { map.removeLayer(blotMarker); blotMarker = null; }
-    blotMarker = L.marker(ll, {
-      icon: L.divIcon({ className: 'blot-wrap', html: BLOT_SVG, iconSize: [190, 190], iconAnchor: [95, 95] }),
-      pane: 'blot', interactive: false, keyboard: false,
-    }).addTo(map);
-    // 化开的动画只挂一小会儿。播得动就播,播不动(rAF 被节流)定时器也会把
-    // 这个类摘掉,元素落回基态 —— 基态本来就是可见的,所以不会白滴一团看不见的颜料。
-    const el = blotMarker.getElement() && blotMarker.getElement().querySelector('.blot');
-    if (el && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      el.classList.add('spreading');
-      setTimeout(() => el.classList.remove('spreading'), 700);
-    }
-  }
-
-  /** 只把选中的那枚图钉变实心,其余保持半透明让位给底图。 */
+  /** 选中的那枚图钉加一圈光晕并浮到最上层。 */
   function markPin(no) {
     for (const { no: n, mk } of (state.pins || [])) {
       const el = mk.getElement && mk.getElement();
@@ -945,29 +1151,76 @@
     }
   }
 
-  /** 点了哪套房,地图就飞到哪套房,并在那里滴一团颜料。 */
+  /** 点了哪套房,地图就飞到哪套房,并高亮它的图钉。 */
   function focusOnMap(m) {
     const map = state.map;
-    markPin(state.offset + state.metrics.indexOf(m) + 1);
+    const view = resultView();
+    const at = view.metrics.findIndex(item => item.id === m.id);
+    markPin(at >= 0 ? view.offset + at + 1 : 0);        // 不在当前结果里(收藏夹打开)就不高亮任何编号
     if (!map || typeof L === 'undefined' || m.latitude == null || m.longitude == null) return;
     const ll = [m.latitude, m.longitude];
     const zoom = Math.max(map.getZoom(), 15);
-    map.setView(ll, zoom, { animate: true, duration: 0.6 });
-    // Leaflet 的平移动画走 rAF —— 标签页被节流时 rAF 不触发,视图会停在半路。
-    // 和滚动那里同一个教训:动画可以没有,**到没到位不能赌**。
-    //
-    // 这个补位定时器必须**可取消**:它 800ms 后无条件把视图拽回这套房。
-    // 距离测算在这 800ms 内取好的景会被它悄悄推翻 —— 实测就是这样,
-    // 两个图钉一个跑到窗子底下、一个飞到画布外 4000 像素,而且没有任何报错。
+    map.setView(ll, zoom, { animate: false });
+    // 等详情窗布局稳定后校正遮挡位置。计时器必须可取消,并验证仍是同一张地图、
+    // 同一套房;历史切换或距离测算接管后不能访问已拆除的地图或把新视图拽回去。
     clearTimeout(state.focusTimer);
     state.focusTimer = setTimeout(() => {
+      if (state.map !== map || state.selectedId !== m.id) return;
       const c = map.getCenter();
       if (Math.abs(c.lat - ll[0]) > 1e-4 || Math.abs(c.lng - ll[1]) > 1e-4) {
         map.setView(ll, zoom, { animate: false });
       }
       nudgeForPanel(map);
     }, 800);
-    dropBlot(map, ll);
+  }
+
+  /** 底图:优先毛玻璃矢量底图(map-glass.js),拿不到就退回 OSM 栅格瓦片。
+   *  矢量库是懒加载的,第一次要等它到位;等的时候地图可能已经被换掉,所以先核对是不是同一张。 */
+  function addBasemap(map) {
+    const raster = () => L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, className: 'osm-raster' }).addTo(map);
+    const attr = vector => { const e = document.querySelector('.attr-vector'); if (e) e.hidden = !vector; };
+    if (!window.nwGlassBase) { raster(); attr(false); return; }
+    window.nwGlassBase().then(style => {
+      if (state.map !== map) return;
+      if (style) { L.maplibreGL({ style, attributionControl: false, interactive: false }).addTo(map); attr(true); }
+      else { raster(); attr(false); }
+    });
+  }
+
+  // ---------------------------------------------------------------- 地图面板:控制条 / 城市 / 计数
+  function setMapCount(n) { const e = $('#map-count'); if (e) e.textContent = T.mapCount(n); }
+
+  /** 城市只做演示:只有墨尔本有数据。其余列出名字、标「即将支持」、不可选 ——
+   *  不给它们放地图,也不假装能搜。 */
+  const CITIES = [['MELBOURNE', true], ['SYDNEY'], ['BRISBANE'], ['ADELAIDE'], ['PERTH'], ['CANBERRA'], ['HOBART']];
+  function renderCityMenu() {
+    const menu = $('#city-menu'); if (!menu) return;
+    menu.replaceChildren(...CITIES.map(([name, live]) => {
+      const li = h('li', 'city-opt' + (live ? ' on' : ''));
+      li.setAttribute('role', 'option'); li.setAttribute('aria-selected', live ? 'true' : 'false');
+      if (!live) li.setAttribute('aria-disabled', 'true');
+      li.append(h('span', 'city-opt-name', name), h('span', 'city-opt-tag', live ? '' : T.citySoon));
+      if (live) li.addEventListener('click', () => closeCityMenu());
+      return li;
+    }));
+  }
+  function closeCityMenu() {
+    const menu = $('#city-menu'); if (!menu || menu.hidden) return false;
+    menu.hidden = true; $('#city-btn').setAttribute('aria-expanded', 'false');
+    document.removeEventListener('pointerdown', cityOutside, true);
+    return true;
+  }
+  function cityOutside(ev) { if (!ev.target.closest('.city')) closeCityMenu(); }
+  function initMapPanel() {
+    $('#city-btn').addEventListener('click', () => {
+      if (closeCityMenu()) return;
+      renderCityMenu();
+      $('#city-menu').hidden = false; $('#city-btn').setAttribute('aria-expanded', 'true');
+      setTimeout(() => document.addEventListener('pointerdown', cityOutside, true), 0);
+    });
+    $('#map-fit').addEventListener('click', () => { if (state.mapFit) state.mapFit(); });
+    $('#map-zin').addEventListener('click', () => { if (state.map) { state.mapTook && state.mapTook(); state.map.zoomIn(); } });
+    $('#map-zout').addEventListener('click', () => { if (state.map) { state.mapTook && state.mapTook(); state.map.zoomOut(); } });
   }
 
   /** 详情浮窗就盖在地图上,而点卡片的目的正是"看它在哪" ——
@@ -1074,7 +1327,7 @@
     // 所以给一个"看地图"的出口 —— 关掉窗子,整幅地图就腾出来了,
     // 而测算结果本来就留在地图上不会消失。
     const look = h('button', 'link m-look', T.measureLook); look.type = 'button';
-    look.addEventListener('click', closeSheet);
+    look.addEventListener('click', () => closeSheet());       // 去看地图:不算「关掉详情回收藏」
     // 有画上去的东西,就得有擦掉的办法。之前只能靠"换一套房"顺带清掉 ——
     // 那不是一个出口,那是副作用。
     const wipe = h('button', 'link m-wipe', T.measureClear); wipe.type = 'button';
@@ -1364,42 +1617,57 @@
   /** 把 0~100 的属性分说成人话。
    *  分数本身没有参照物 ——「安静 92」好到什么程度?读者答不上来。
    *  排位是 enrich 时用全库分布算好的(context.score_rank),这里只负责措辞。
-   *  夹到 1~99:排位 100 会说出「超过全库 100% 的房源」,那是不可能的。 */
+   *  保留合法的 0,只封顶 99:不说「超过全库 100% 的房源」。 */
   function rankText(m, attr) {
     const r = (m.context_ranks || {})[attr];
     if (r == null) return '';
-    return T.rank(Math.min(Math.max(r, 1), 99));
+    return T.rank(Math.min(Math.max(r, 0), 99));
   }
 
   /** 详情窗的内容顺序 = 一个人看房时真会问的问题的顺序:
    *    这价合不合理 -> 住着怎么样 -> 一共要掏多少 -> 租出去收得回来吗 -> 有什么要留神的
    *  原来打头的是「投资账」,四个术语并排(毛租金回报率 / 印花税 / NOI / Cap Rate·ROI),
    *  第一眼就要同时消化四个不认识的词。信息没错,顺序错了。 */
-  function openDetail(m) {
+  /** keepToken:并排收缩回一套时用 —— 保留原来的来源令牌、不再广播「打开」,
+   *  这样从收藏进来的并排,缩成一套后关掉照样回收藏。 */
+  function openDetail(m, { keepToken = false } = {}) {
     // 上一套房的测算结果要擦掉:那根线量的是**上一套**到某地的距离,
     // 留着会被当成当前这套的。
     if (state.selectedId !== m.id) clearMeasure();
     state.selectedId = m.id;
     for (const c of document.querySelectorAll('.card')) c.classList.toggle('selected', c.dataset.id == m.id);
     focusOnMap(m);
-    const d = $('#detail'); d.innerHTML = ''; const meta = state.meta;
+    const d = $('#detail'); d.innerHTML = ''; d.classList.remove('compare');
+    state.compare = []; state.detailMetric = m;           // 单开:并排状态清空
+    if (!keepToken) state.detailToken = m.id;             // 关闭时按这个令牌告诉收藏模块是谁打开的
     d.appendChild(h('div', 'grabber'));            // 窄屏抽屉的下拉条
     // 宽屏:标题栏兼拖动把手
     const bar = h('div', 'd-bar');
     bar.appendChild(h('div', 'd-bar-title', (m.suburb || '') + ' · ' + (m.address || '')));
     const close = h('button', 'd-close'); close.type = 'button'; close.title = T.closeEsc;
     close.setAttribute('aria-label', T.close); close.innerHTML = X;
-    close.addEventListener('click', closeSheet);
+    close.addEventListener('click', () => closeSheet({ user: true }));
+    bar.appendChild(compareButton(T.cmpAdd));            // 「+ 并排对比」:再开一套放在右边
     bar.appendChild(close); d.appendChild(bar);
     makeDraggable(bar);
 
+    renderDetailInto(d, m);
+    openSheet();
+    if (!keepToken) window.dispatchEvent(new CustomEvent('nw:detail', { detail: { open: true, id: state.detailToken } }));
+  }
+
+  /** 把一套房的详情内容(头部 + 五段 + 图例)画进容器 d。
+   *  单独打开时画进详情窗;并排对比时每套画进一列,compact 时不画距离测算。
+   *  每段带 data-sec,并排时按段对齐(见 renderCompare)。 */
+  function renderDetailInto(d, m, { compact = false } = {}) {
+    const meta = state.meta;
     // ---- 头部 ----
     // 地址宽屏时标题栏里已经有一份了,这里的那份用 CSS 藏掉(窄屏没有标题栏,留着)。
     // 原来两处都显示,详情窗一打开顶上就是同一行字写两遍。
     const head = h('div', 'd-head'); const l = h('div');
     l.appendChild(h('div', 'd-addr', (m.suburb || '') + ' · ' + (m.address || '')));
     l.appendChild(h('div', 'd-price', money(m.price)));
-    l.appendChild(h('div', 'd-meta', [T.beds(m.bedrooms), T.baths(m.bathrooms), typeZh(m), m.car_spaces != null ? T.carSpaces(m.car_spaces) : null, m.distance_cbd != null ? T.toCbd(m.distance_cbd) : null].filter(Boolean).join(' · ')));
+    l.appendChild(h('div', 'd-meta', [T.beds(m.bedrooms), T.baths(m.bathrooms), typeZh(m), m.distance_cbd != null ? T.toCbd(m.distance_cbd) : null].filter(Boolean).join(' · ')));
     head.appendChild(l);
     // 和卡片用同一套指标列(标签在上、数值在下),两处看起来才是一件东西
     const hl = headline(m);
@@ -1407,13 +1675,13 @@
     const pm = h('div', 'metric primary');
     pm.appendChild(h('div', 'ml', hl.l));
     const pv = h('div', 'mv ' + hl.cls); pv.textContent = hl.v; pm.appendChild(pv);
-    const sortAttr = state.params && state.params.sort_by;
+    const sortAttr = resultView().params?.sort_by;
     if (sortAttr && meta.attributes[sortAttr]) {
       const rt = rankText(m, sortAttr);
       if (rt) pm.appendChild(h('div', 'ms', rt));
     }
     hd.appendChild(pm); head.appendChild(hd);
-    d.appendChild(head);
+    head.dataset.sec = 'head'; d.appendChild(head);
 
     // ---- 一、这个价合不合理 ----
     // 放在最前面,因为这是所有人点开一套房时脑子里的第一个问题。
@@ -1430,20 +1698,25 @@
       //
       // 正常的情况只报结论。价格正常是绝大多数房源的状态,把它展开成一整段,
       // 等于让人每点开一套就重读一遍同样的话;真正需要解释的是不正常的那些。
-      const err = m.valuation_error_pct, gap = m.predicted_gap;
-      const tn = ptZh(m.property_type);
+      // 判断看"售价在不在模型的把握区间里",不看差了几个百分点。
+      // 区间是在模型没见过的成交上校准并验证过的:说 80% 就真有约 80% 的成交价落在里面。
+      // 在区间里的差距就是正常波动,哪怕差 15% 也不许说成便宜或贵。
+      const gap = m.predicted_gap, pos = m.valuation_position;
+      const iv = m.valuation_interval || [], lvl = m.valuation_interval_level;
+      if (iv[0] != null && lvl) {
+        cmp.appendChild(kv(T.intervalLabel(pct(lvl, 0)), money(iv[0]) + ' – ' + money(iv[1]), 'model'));
+      }
       let verdict = '';
-      if (gap != null && err != null) {
-        if (Math.abs(gap) <= err) verdict = T.verdictNormal(pct(Math.abs(gap)), tn, pct(err));
-        else if (gap > 0) verdict = T.verdictAbove(pct(gap), tn, pct(err));
-        else verdict = T.verdictBelow(pct(-gap), tn, pct(err));
+      if (gap != null && pos) {
+        if (pos === 'within') verdict = T.verdictWithin(pct(lvl, 0));
+        else if (pos === 'below') verdict = T.verdictBelowRange(pct(gap), pct(lvl, 0));
+        else verdict = T.verdictAboveRange(pct(-gap), pct(lvl, 0));
       }
       if (verdict) s.appendChild(h('div', 'plain', verdict));
-      const rng = m.valuation_range || [];
-      if (rng[0] != null) {
-        s.appendChild(h('div', 'caveat', T.rangeNote(money(rng[0]), money(rng[1]))));
+      if (iv[0] != null && lvl) {
+        s.appendChild(h('div', 'caveat', T.intervalNote(pct(lvl, 0), pct(m.valuation_interval_coverage, 0))));
       }
-      d.appendChild(s);
+      s.dataset.sec = 'price'; d.appendChild(s);
     }
 
     // ---- 二、住在这儿是什么体验 ----
@@ -1461,11 +1734,13 @@
     // Werribee Campus」8.0 km)。它有三个问题:卡片上已经有同一个数;
     // 长机构名在窄栏里折成四行;而且它是**上一轮检索条件的副产物**,
     // 不是用户此刻想问的东西。换成一个能自己动手量的工具。
-    s2.appendChild(measureBlock(m));
+    if (!compact) s2.appendChild(measureBlock(m));   // 并排时不画:它在唯一的地图上画线,多列会互相覆盖
 
     const scores = m.context_scores || {};
-    const asked = new Set(((state.params || {}).abstract_needs || []).map(a => a.attribute));
-    if (state.params && state.params.sort_by && meta.attributes[state.params.sort_by]) asked.add(state.params.sort_by);
+    const viewParams = resultView().params || {};
+    const asked = new Set((viewParams.abstract_needs || []).map(a => a.attribute));
+    for (const goal of viewParams.relative_preferences || []) if (meta.attributes[goal.field]) asked.add(goal.field);
+    if (viewParams.sort_by && meta.attributes[viewParams.sort_by]) asked.add(viewParams.sort_by);
     for (const a of asked) {
       if (scores[a] == null) continue;
       const eb = h('div', 'evbox'); const t = h('div', 't');
@@ -1484,7 +1759,7 @@
       if (meta.attribute_notes[a]) eb.appendChild(h('div', 'ev-note', T.highMeans + meta.attribute_notes[a]));
       s2.appendChild(eb);
     }
-    d.appendChild(s2);
+    s2.dataset.sec = 'living'; d.appendChild(s2);
 
     // ---- 三、买下来一共要付多少 ----
     // 印花税原来是四格里的一格,一个孤零零的术语。放进这列加法里,它就自动
@@ -1535,21 +1810,37 @@
         box.appendChild(totalRow);
       }
       s3.appendChild(box);
-      d.appendChild(s3);
+      s3.dataset.sec = 'cost'; d.appendChild(s3);
     }
 
     // ---- 四、如果租出去 ----
     if (m.annual_rent != null) {
       const s4 = h('div', 'sec'); s4.appendChild(h('div', 'sec-title', T.sec4));
       const box = h('div', 'paybox');
+      // 注解里写明租金的匹配粒度:这个数是片区中位租金,不是这套房自己的租金
       box.appendChild(payRow(T.rowRent, money(m.annual_rent),
-        m.gross_yield != null ? T.rowRentNote(pct(m.gross_yield)) : ''));
+        [m.gross_yield != null ? T.rowRentNote(pct(m.gross_yield)) : '', T.rentScope[m.rent_source] || '']
+          .filter(Boolean).join(' · ')));
 
       // 运营支出比例摆在它自己那句注解里 —— 那句话本来就在解释这个数怎么来的,
       // 把百分比换成输入框,读起来仍然是一句完整的话。
       const opexNote = h('div', 'pn');
-      const oi = h('input', 'pn-in'); oi.type = 'number'; oi.step = '1'; oi.min = '0'; oi.max = '99';
-      oi.value = Math.round(live.opex_rate * 100); oi.inputMode = 'decimal';
+      // 显示本轮快照里的运营支出比例,不再取整成 28(NOI/ROI 是按 28.4% 算的,旁边写 28% 就对不上)。
+      // 做法:把后端发来的数的最短往返十进制文本小数点右移两位(0.284 -> 28.4,0 -> 0,1e-7 -> 0.00001,
+      // 0.9999999999999999 -> 99.99999999999999),**不做浮点乘法、不四舍五入**,所以 <1 的比例不会被显示成 100,也没有 28.399999 这类尾巴。
+      // 保证的只是「JSON 解析后这个数的最短往返十进制文本右移两位」;不保留原始 JSON 文本,也不是任意精度小数。
+      const pctText = r => {
+        let [mant, exp = '0'] = String(r).toLowerCase().split('e');
+        let [ip, fp = ''] = mant.split('.'); let digits = ip + fp, point = ip.length + Number(exp) + 2;
+        if (point <= 0) { digits = '0'.repeat(1 - point) + digits; point = 1; }
+        if (point > digits.length) digits += '0'.repeat(point - digits.length);
+        const whole = digits.slice(0, point).replace(/^0+(?=\d)/, ''), frac = digits.slice(point).replace(/0+$/, '');
+        return frac ? whole + '.' + frac : whole;
+      };
+      // 输入框与下面 change 处理(v < 100)一致:step=any 允许小数;max 取「小于 100 的最大 16 位文本」,所以 100 会被浏览器判为越界,
+      // 而合法的极端比例 0.9999999999999999 (显示 99.99999999999999) 仍然有效。
+      const oi = h('input', 'pn-in'); oi.type = 'number'; oi.step = 'any'; oi.min = '0'; oi.max = '99.99999999999999';
+      oi.value = pctText(live.opex_rate); oi.inputMode = 'decimal';
       const fitOi = () => { oi.style.width = Math.max(2, String(oi.value).length) + 0.6 + 'ch'; };
       fitOi(); oi.addEventListener('input', fitOi);
       oi.addEventListener('change', () => {
@@ -1588,7 +1879,7 @@
       // 条件卡里做的事,这个按钮是同一件事的第二个入口,而且代价大得多
       // (重跑整张图 + 一次 LLM)。上面那两个字段做的是"这一套房如果按 X 算
       // 会怎样"的试算,那才是详情窗该干的事。
-      d.appendChild(s4);
+      s4.dataset.sec = 'rent'; d.appendChild(s4);
     }
 
     // ---- 五、买之前要留意的 ----
@@ -1607,7 +1898,7 @@
     if (m.crime) rows.appendChild(row(T.crimeLabel(m.crime.lga), T.crimeRate(Math.round(m.crime.rate_per_100k).toLocaleString('en-AU')), '', T.crimeScope + (meta.crime_year ? ' · ' + meta.crime_year : '')));
     s5.appendChild(rows);
     s5.appendChild(h('div', 'caveat', T.sec5Caveat));
-    d.appendChild(s5);
+    s5.dataset.sec = 'watch'; d.appendChild(s5);
 
     // ---- 数字的来源 ----
     // 图例挪到最后:它原来在所有数字之前,读者还没见过任何一个符号,
@@ -1622,20 +1913,218 @@
     li[0].textContent = ' ' + T.legendMeasured;
     li[1].textContent = ' ' + T.legendAssume;
     li[2].textContent = ' ' + T.legendModel;
-    lgw.appendChild(lg); d.appendChild(lgw);
+    lgw.dataset.sec = 'legend'; lgw.appendChild(lg); d.appendChild(lgw);
 
     // 底部那个「可调假设」框拆掉了 —— 它的两个输入框已经搬到它们各自
     // 影响的那一行旁边(段三的杂费、段四的运营支出比例)。留着就是同一件事
     // 有两个入口,而且下面那个还离得更远。
 
-    openSheet();
   }
 
   // 遮罩/浮层改用 is-open —— .hidden 是 display:none,display 不可过渡,
   // 用它开关等于放弃一切淡入淡出。
-  function openSheet() { const d = $('#detail'); d.classList.add('open'); if (detailIsSheet()) { $('#backdrop').classList.add('is-open'); $('#backdrop').onclick = closeSheet; } d.scrollTop = 0; }
-  function closeSheet() {
+  // ---------------------------------------------------------------- 并排对比
+  // 最多 3 套并排。每一列就是一份完整详情(renderDetailInto, compact),按段落放进同一个网格:
+  // 「价格区间」挨着「价格区间」,整体只有一根滚动条。顶部一行关键数字,只对方向没有争议的三项
+  // (毛回报越高越好、印花税越低越好、离火车站越近越好)标「最优」;房价高低因人而异,不标。
+  // 数字的来源标记与单开详情一致 —— 列里画的就是同一份详情,不另起对比口径。
+  const CMP_MAX = 3;
+  const CMP_SECS = ['head', 'price', 'living', 'cost', 'rent', 'watch'];
+  const sameId = (a, b) => String(a) === String(b);
+
+  /** 可展示的详情数据:当前结果里有就用它(本轮刚算的),否则向后端按编号现算。 */
+  async function metricFor(id) {
+    const hit = [...(resultView().metrics || []), ...(state.compare || []), state.detailMetric].find(x => x && sameId(x.id, id));
+    if (hit) return hit;
+    const r = await fetch(`/api/property/${id}?lang=${state.lang}`, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error(String(r.status));
+    return (await r.json()).metric;
+  }
+
+  /** announce:从收藏多选打开时广播「打开」(令牌 compare),关闭后才会回收藏;
+   *  从单开详情里「+ 并排对比」扩成并排时不广播,沿用原来的令牌。 */
+  function openCompare(list, { announce = false } = {}) {
+    state.compare = list.slice(0, CMP_MAX);
+    if (announce) state.detailToken = 'compare';
+    state.selectedId = state.compare[0] ? state.compare[0].id : null;
+    for (const c of document.querySelectorAll('.card')) c.classList.toggle('selected', state.compare.some(x => sameId(x.id, c.dataset.id)));
+    clearMeasure();
+    const wasOpen = $('#detail').classList.contains('open');
+    renderCompare();
+    if (!wasOpen) openSheet();
+    if (announce) window.dispatchEvent(new CustomEvent('nw:detail', { detail: { open: true, id: 'compare' } }));
+  }
+
+  function compareButton(label) {
+    const b = h('button', 'cmp-add', label); b.type = 'button';
+    b.setAttribute('aria-haspopup', 'dialog'); b.setAttribute('aria-expanded', 'false');
+    b.addEventListener('click', ev => { ev.stopPropagation(); togglePicker(b); });
+    return b;
+  }
+
+  /** 关键数字:同一组字段,各列一格。best:方向没有争议的才标。 */
+  function summaryCells(list) {
+    const rows = [
+      { k: T.askingPrice, v: m => m.price, f: money },
+      { k: T.modelEstimate, v: m => m.predicted_price, f: money, cls: 'model' },
+      { k: T.cmpYield, v: m => m.gross_yield, f: v => pct(v), best: 'max' },
+      { k: T.rowDuty, v: m => m.stamp_duty, f: money, best: 'min' },
+      { k: kindZh('train_station'), v: m => (m.amenities || {}).train_station?.distance_m, f: dist, best: 'min' },
+    ];
+    const cells = list.map(() => { const c = h('div', 'sec cmp-cell cmp-sum'); c.dataset.sec = 'summary'; return c; });
+    for (const r of rows) {
+      const vals = list.map(m => { const v = r.v(m); return typeof v === 'number' && isFinite(v) ? v : null; });
+      const known = vals.filter(v => v != null);
+      const pick = r.best && list.length > 1 && known.length > 1 && new Set(known).size > 1
+        ? (r.best === 'max' ? Math.max(...known) : Math.min(...known)) : null;
+      vals.forEach((v, i) => {
+        const e = kv(r.k, v == null ? '—' : r.f(v), r.cls);
+        if (pick != null && v === pick) { e.classList.add('best'); e.querySelector('.v').appendChild(h('span', 'best-tag', T.cmpBest)); }
+        cells[i].appendChild(e);
+      });
+    }
+    return cells;
+  }
+
+  /** 「只看不同」:同一段里标签相同、各列数值也相同的行收起来(可编辑的假设行永远保留)。 */
+  function markSame(groups) {
+    const rowsOf = cell => [...cell.querySelectorAll('.kv, .pay:not(.editable), .row')].map(r => ({
+      r, k: (r.querySelector('.k, .pk') || {}).textContent?.trim(), v: (r.querySelector('.v, .pv') || {}).textContent?.trim() }));
+    for (const cells of groups) {
+      if (cells.some(c => !c || c.classList.contains('cmp-missing'))) continue;
+      const cols = cells.map(rowsOf);
+      for (const { r, k, v } of cols[0]) {
+        if (!k) continue;
+        const peers = cols.slice(1).map(rows => rows.find(x => x.k === k));
+        if (peers.every(p => p && p.v === v)) { r.classList.add('same'); peers.forEach(p => p.r.classList.add('same')); }
+      }
+      // 整段都一样:只看不同时这一段只剩标题,标注「各项相同」,免得看起来像数据丢了
+      const rows0 = cols[0];
+      if (rows0.length && rows0.every(x => x.r.classList.contains('same')) && !cells[0].querySelector('.plain, .evbox')) {
+        cells.forEach(c => { c.classList.add('all-same'); c.querySelector('.sec-title')?.setAttribute('data-same-note', T.cmpAllSame); });
+      }
+    }
+  }
+
+  function renderCompare() {
+    const d = $('#detail'), list = state.compare;
+    closePicker();
+    if (list.length <= 1) {                               // 只剩一套:变回普通详情,来源令牌不变
+      if (list.length) openDetail(list[0], { keepToken: true }); else closeSheet();
+      return;
+    }
+    const top = d.scrollTop;
+    d.innerHTML = ''; d.classList.add('compare'); d.style.setProperty('--n', list.length);
+    d.appendChild(h('div', 'grabber'));
+    const bar = h('div', 'd-bar cmp-bar');
+    bar.appendChild(h('div', 'd-bar-title', T.cmpTitle(list.length)));
+    const diff = h('button', 'cmp-diff' + (state.cmpDiff ? ' on' : ''), T.cmpDiffOnly); diff.type = 'button';
+    diff.setAttribute('aria-pressed', String(!!state.cmpDiff));
+    diff.addEventListener('click', () => { state.cmpDiff = !state.cmpDiff; renderCompare(); });
+    bar.appendChild(diff);
+    if (list.length < CMP_MAX) bar.appendChild(compareButton(T.cmpAddMore));
+    const close = h('button', 'd-close'); close.type = 'button'; close.title = T.closeEsc;
+    close.setAttribute('aria-label', T.close); close.innerHTML = X;
+    close.addEventListener('click', () => closeSheet({ user: true }));
+    bar.appendChild(close); d.appendChild(bar);
+    makeDraggable(bar);
+
+    const grid = h('div', 'cmp-grid' + (state.cmpDiff ? ' diff-only' : ''));
+    const cols = list.map(m => { const c = document.createElement('div'); renderDetailInto(c, m, { compact: true }); return c; });
+    list.forEach(m => {                                   // 每列固定表头:地址 + 移出对比
+      const hd = h('div', 'cmp-colhead');
+      hd.appendChild(h('div', 'cmp-coladdr', (m.suburb || '') + ' · ' + (m.address || '')));
+      const rm = h('button', 'cmp-remove'); rm.type = 'button'; rm.innerHTML = X;
+      rm.title = T.cmpRemove; rm.setAttribute('aria-label', T.cmpRemove + ':' + (m.address || ''));
+      rm.addEventListener('click', () => { state.compare = state.compare.filter(x => x !== m); renderCompare(); });
+      hd.appendChild(rm); grid.appendChild(hd);
+    });
+    summaryCells(list).forEach(c => grid.appendChild(c));
+    const groups = [];
+    for (const key of CMP_SECS) {                         // 按段落对齐;某套缺这一段就放占位格
+      const cells = cols.map(c => c.querySelector(`:scope > [data-sec="${key}"]`));
+      if (cells.every(x => !x)) continue;
+      const placed = cells.map(x => x || h('div', 'sec cmp-missing', T.cmpMissing));
+      placed.forEach(x => { x.classList.add('cmp-cell'); grid.appendChild(x); });
+      groups.push(placed);
+    }
+    markSame(groups);
+    const legend = cols[0].querySelector(':scope > [data-sec="legend"]');
+    if (legend) { legend.classList.add('cmp-span'); grid.appendChild(legend); }
+    d.appendChild(grid);
+    d.scrollTop = top;
+  }
+
+  // ---- 「选一套加入」:当前结果 + 我的收藏,已在对比里的不列 ----
+  let picker = null;
+  function closePicker() {
+    if (!picker) return;
+    picker.el.remove(); picker.btn.setAttribute('aria-expanded', 'false'); picker = null;
+    document.removeEventListener('pointerdown', pickerOutside, true);
+  }
+  function pickerOutside(ev) { if (picker && !picker.el.contains(ev.target) && ev.target !== picker.btn) closePicker(); }
+  function togglePicker(btn) {
+    if (picker) { const same = picker.btn === btn; closePicker(); if (same) return; }
+    const open = state.compare.length ? state.compare : [state.detailMetric].filter(Boolean);
+    const taken = id => open.some(x => sameId(x.id, id));
+    const el = h('div', 'cmp-picker'); el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', T.cmpPickTitle);
+    el.appendChild(h('div', 'cmp-pick-title', T.cmpPickTitle));
+    const groups = [
+      [T.cmpFromResults, (resultView().metrics || []).filter(m => !taken(m.id)).map(m => ({ id: m.id, suburb: m.suburb, address: m.address, price: m.price }))],
+      [T.cmpFromFavs, ((window.nwFav && window.nwFav.list && window.nwFav.list()) || []).filter(it => !taken(it.id))
+        .map(it => ({ id: it.id, suburb: it.snapshot.suburb, address: it.snapshot.address, price: it.snapshot.price }))],
+    ];
+    let any = false;
+    for (const [title, items] of groups) {
+      const seen = new Set(), uniq = items.filter(x => !seen.has(String(x.id)) && seen.add(String(x.id)));
+      if (!uniq.length) continue;
+      any = true;
+      el.appendChild(h('div', 'cmp-pick-group', title));
+      for (const it of uniq) {
+        const b = h('button', 'cmp-pick-item'); b.type = 'button';
+        b.appendChild(h('span', 'cmp-pick-addr', (it.suburb || '') + ' · ' + (it.address || '')));
+        b.appendChild(h('span', 'cmp-pick-price', it.price != null ? money(it.price) : ''));
+        b.addEventListener('click', async () => {
+          b.disabled = true; b.classList.add('busy');
+          try {
+            const m = await metricFor(it.id);
+            closePicker();
+            openCompare([...open, m]);
+          } catch (_) { b.disabled = false; b.classList.remove('busy'); b.title = T.cmpFailed; b.classList.add('failed'); }
+        });
+        el.appendChild(b);
+      }
+    }
+    if (!any) el.appendChild(h('div', 'cmp-pick-empty', T.cmpNone));
+    const d = $('#detail'); d.appendChild(el);
+    const br = btn.getBoundingClientRect(), dr = d.getBoundingClientRect();
+    el.style.top = (br.bottom - dr.top + d.scrollTop + 6) + 'px';
+    el.style.right = Math.max(8, dr.right - br.right) + 'px';
+    btn.setAttribute('aria-expanded', 'true');
+    picker = { el, btn };
+    setTimeout(() => document.addEventListener('pointerdown', pickerOutside, true), 0);
+  }
+
+  /** 收藏夹多选「并排打开」:按编号取数据(当前结果里有就直接用),凑齐后一起打开。 */
+  async function compareIds(ids) {
+    const list = [];
+    for (const id of ids.slice(0, CMP_MAX)) {
+      try { list.push(await metricFor(id)); }
+      catch (err) { console.warn('compare: skipped', id, err); }   // 取不到的跳过,但留下记录,代码错误不能被悄悄吞掉
+    }
+    if (list.length >= 2) openCompare(list, { announce: true });
+    else if (list.length === 1) openDetail(list[0]);
+    return list.length;
+  }
+
+  function openSheet() { const d = $('#detail'); d.classList.add('open'); if (detailIsSheet()) { $('#backdrop').classList.add('is-open'); $('#backdrop').onclick = () => closeSheet({ user: true }); } d.scrollTop = 0; }
+  /** user:true 只给「用户主动关掉详情」(×、Esc、点遮罩)。新对话、回首页、换一批这类
+   *  程序顺手收起不算 —— 收藏抽屉只在前者之后重新打开(见 favorites.js)。 */
+  function closeSheet({ user = false } = {}) {
+    const wasOpen = $('#detail').classList.contains('open');
     $('#detail').classList.remove('open'); $('#backdrop').classList.remove('is-open');
+    closePicker();
+    if (wasOpen) window.dispatchEvent(new CustomEvent('nw:detail', { detail: { open: false, id: state.detailToken ?? state.selectedId, user: user === true } }));
     // 窗子一让开,整幅地图就腾出来了 —— 把测算的连线按全宽重新取一次景。
     // 等 400ms 是让滑出动画走完,不然算的还是被盖住时的可视区域。
     if (state.measureBounds && state.map) {
@@ -1646,109 +2135,354 @@
     }
   }
 
-  // ---------------------------------------------------------------- 顶栏
-  function showAssumptions() {
-    const a = state.meta.assumptions;
-    openPopover(T.assumeTitle, [], () => {}, a.describe.join('\n'));
-    $('#popover .hint').style.whiteSpace = 'pre-line';
+  // ---------------------------------------------------------------- 首屏:玻璃建筑 + 嵌入词条
+
+  // 词云的生命周期与 CSS/rAF 时钟无关。仅在淡入淡出期间以约 30fps 改 opacity/transform,
+  // 计时到点直接恢复可见基线;预览器暂停 CSS 动画也不会变成静止或永久隐藏的卡片。
+  const drift = { cycle: null, timers: new Set(), paused: false, lastSlot: -1, bag: [], size: '', anchors: [] };
+  const driftNarrow = matchMedia('(max-width: 599px)');
+  const driftReduced = matchMedia('(prefers-reduced-motion: reduce)');
+  const driftPointer = matchMedia('(hover: hover) and (pointer: fine)');
+
+  function driftLater(fn, delay) {
+    const id = setTimeout(() => { drift.timers.delete(id); fn(); }, delay);
+    drift.timers.add(id);
   }
 
-  // ---------------------------------------------------------------- 首屏浮动词条
-
-  /** 首屏散落的例子。
-   *
-   *  为什么不是标题下面一排整齐的按钮:一排等宽胶囊读起来是"表单选项",
-   *  而这几条是**例子**。大小不一、松散地飘在空白处,才像"你可以这么问",
-   *  不像"你只能选这四个"。
-   *
-   *  坐标是每次进页面现算的,不写死。写死的话换个窗口尺寸、换成英文
-   *  (词条长度完全不同)就会压到标题上 —— 而那种错位不报错,只是难看。
-   *  做法:先量出标题、正文、输入框各占哪一块,再在剩下的地方随机撒点,
-   *  撞上就重试;六十次都放不下就干脆不放,不硬塞。
-   */
-  function renderDrift() {
-    const host = $('#driftfield');
-    if (!host) return;
-    host.innerHTML = '';
-    const pool = (T.chips || []).slice();
-    if (!pool.length) return;
-    // 洗牌:每次进来是不同的一批,页面不会每天长得一模一样
-    for (let i = pool.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      const t = pool[i]; pool[i] = pool[j]; pool[j] = t;
-    }
-    const picks = pool.slice(0, Math.min(5, pool.length));
-
-    const box = host.getBoundingClientRect();
-    if (box.width < 240 || box.height < 200) return;   // 太挤了就不摆
-    const PAD = 10;
-    // 让开的区域:标题、正文、输入框。四周再各留一圈余量,
-    // 词条擦着标题边飞过去也是难看的。
-    const avoid = ['.welcome-h', '.welcome-p', '#composer']
-      .map(sel => document.querySelector(sel))
-      .filter(el => el && el.offsetParent !== null)
-      .map(el => {
-        const r = el.getBoundingClientRect();
-        return { l: r.left - box.left - 28, t: r.top - box.top - 22,
-                 r: r.right - box.left + 28, b: r.bottom - box.top + 22 };
-      });
-    const placed = [];
-    const overlaps = (a, b) => !(a.r < b.l || a.l > b.r || a.b < b.t || a.t > b.b);
-
-    picks.forEach((text, i) => {
-      const slot = h('span', 'drift-slot');
-      const btn = h('button', 'drift-chip'); btn.type = 'button';
-      // 用 · 分隔的词条:分隔符调淡,眼睛才会先落在词上而不是点上
-      text.split(' · ').forEach((part, k) => {
-        if (k) btn.appendChild(h('span', 'dc-sep', '·'));
-        btn.appendChild(h('span', null, part));
-      });
-      // 字号跨度拉开一点。12.4~15.8 那一档人眼几乎读不出差别,
-      // 「大小不一」就白写了;12~17 才看得出来是刻意的层次。
-      btn.style.setProperty('--fs', (12 + Math.random() * 5).toFixed(2) + 'px');
-      btn.addEventListener('click', () => send(text));
-      slot.appendChild(btn);
-      host.appendChild(slot);          // 先进 DOM 才量得到宽高
-
-      const w = slot.offsetWidth, ht = slot.offsetHeight;
-      let spot = null;
-      for (let tries = 0; tries < 60; tries++) {
-        const l = PAD + Math.random() * Math.max(1, box.width - w - PAD * 2);
-        const t = PAD + Math.random() * Math.max(1, box.height - ht - PAD * 2);
-        const rect = { l: l, t: t, r: l + w, b: t + ht };
-        if (avoid.some(a => overlaps(rect, a))) continue;
-        // 词条之间留的缝要盖得住漂移量(±12px),否则两条会飘到一起去 ——
-        // 摆的时候不重叠,飘起来重叠,那种 bug 只在看着的时候才出现。
-        const padded = { l: l - 26, t: t - 22, r: l + w + 26, b: t + ht + 22 };
-        if (placed.some(q => overlaps(padded, q))) continue;
-        spot = rect; break;
-      }
-      if (!spot) { slot.remove(); return; }
-      placed.push(spot);
-      slot.style.left = Math.round(spot.l) + 'px';
-      slot.style.top = Math.round(spot.t) + 'px';
-      // 入场:先挂 .pre(透明),再按次序摘掉,靠 CSS 过渡淡入。
-      // 不用 animation-delay —— 那等于把"看不看得见"押在动画时钟上。
-      slot.classList.add('pre');
-      setTimeout(() => slot.classList.remove('pre'), 160 + i * 90);
-      // 漂移:18~30 秒一个来回,位移十几像素。**负的起始延迟**让每一条
-      // 从各自不同的相位开始 —— 否则五条会整齐划一地一起晃,像在呼吸。
-      slot.style.setProperty('--dur', (18 + Math.random() * 12).toFixed(1) + 's');
-      slot.style.setProperty('--delay', (-Math.random() * 14).toFixed(1) + 's');
-      slot.style.setProperty('--dx', (Math.random() * 24 - 12).toFixed(1) + 'px');
-      slot.style.setProperty('--dy', (Math.random() * 20 - 10).toFixed(1) + 'px');
-      slot.style.setProperty('--op', (0.76 + Math.random() * 0.24).toFixed(2));
+  function stopDrift() {
+    clearTimeout(drift.cycle);
+    drift.cycle = null;
+    drift.timers.forEach(clearTimeout);
+    drift.timers.clear();
+    document.querySelectorAll('.drift-slot').forEach(slot => {
+      slot.style.opacity = '';
+      slot.style.transform = '';
     });
   }
 
-  // 窗口尺寸一变,原来算好的坐标就不作数了。节流 200ms:拖动窗口时
-  // 每一帧都重排既费力又会让词条乱跳。
-  let driftTimer = null;
-  addEventListener('resize', () => {
+  function driftCanRotate() {
+    const host = $('#driftfield');
+    // 宽屏首屏换成城市沙盘后(showroom/showroom.mjs),SVG 词条层被隐藏,不再轮换
+    if ($('#app').dataset.showroom === 'ready' && matchMedia('(min-width: 900px)').matches) return false;
+    return host && $('#app').dataset.stage === 'welcome' && !document.hidden &&
+      !drift.paused && !(driftPointer.matches && host.querySelector('.drift-chip:hover')) &&
+      !host.contains(document.activeElement) && !$('#input').value.trim();
+  }
+
+  function animateDrift(slot, entering, done = () => {}) {
+    const reduced = driftReduced.matches;
+    const duration = reduced ? 220 : entering ? 1200 : 900;
+    const start = performance.now();
+    function frame() {
+      const t = Math.min(1, (performance.now() - start) / duration);
+      slot.style.opacity = String(entering ? t : 1 - t);
+      // 只做轻微上浮 + 缩放,始终不旋转;透明度匀速变化,避免一下闪走。
+      const travel = entering ? Math.pow(1 - t, 3) : t * t * t;
+      slot.style.transform = reduced ? '' :
+        'translate3d(0,' + ((entering ? 8 : -5) * travel) + 'px,0) scale(' + (1 - .03 * travel) + ')';
+      if (t < 1) driftLater(frame, 32);
+      else {
+        if (entering) { slot.style.opacity = ''; slot.style.transform = ''; }
+        done();
+      }
+    }
+    frame();
+  }
+
+  function shuffleDrift(items) {
+    const result = items.slice();
+    for (let i = result.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [result[i], result[j]] = [result[j], result[i]];
+    }
+    return result;
+  }
+
+  /** 词条是嵌在玻璃面上的两行标注:第一段一行,其余一行(「100万内 / 近车站 · 3房」)。 */
+  function fillDriftSlot(slot, text) {
+    slot.dataset.query = text;
+    const btn = h('button', 'drift-chip');
+    btn.type = 'button';
+    btn.setAttribute('aria-label', text);
+    const parts = text.split(' · ');
+    btn.appendChild(h('span', 'dc-l1', parts[0]));
+    if (parts.length > 1) btn.appendChild(h('span', 'dc-l2', parts.slice(1).join(' · ')));
+    btn.addEventListener('click', () => send(text));
+    slot.replaceChildren(btn);
+  }
+
+  function driftRect(slot) {
+    return { x: slot.offsetLeft, y: slot.offsetTop, w: slot.offsetWidth, h: slot.offsetHeight };
+  }
+
+  /** 带 data-drift-avoid 的元素(标题区、输入栏、轮换开关)词条不许盖住。换算到 #driftfield 坐标系。 */
+  function driftAvoidRects(host) {
+    const base = host.getBoundingClientRect();
+    return Array.from(document.querySelectorAll('#app [data-drift-avoid]'))
+      .filter(el => el.offsetParent !== null)
+      .map(el => el.getBoundingClientRect())
+      .map(r => ({ x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height }));
+  }
+
+  // ---- 玻璃建筑:等轴测投影,程序生成。固定种子,所以每次打开是同一座"城",只是词条在换。
+  function cityRandom(seed) {
+    return () => {
+      seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+      let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  const CITY = (() => {
+    const rnd = cityRandom(20260914), towers = [];
+    for (let gy = 0; gy < 7; gy++) for (let gx = 0; gx < 7; gx++) {
+      if (rnd() < .4) continue;
+      // 一半是薄玻璃幕墙片(fin),一半是方塔;越靠后越高,形成向右上抬升的天际线
+      const fin = rnd() < .5, back = Math.max(0, 10 - gx - gy);
+      towers.push({
+        x: gx + rnd() * .25, y: gy + rnd() * .25,
+        w: fin ? .16 + rnd() * .12 : .55 + rnd() * .3,
+        d: fin ? .8 + rnd() * .8 : .55 + rnd() * .3,
+        h: 1.6 + rnd() * 2.2 + back * (.75 + rnd() * .35),
+        lit: rnd() < .24,
+      });
+    }
+    towers.sort((a, b) => (a.x + a.w / 2 + a.y + a.d / 2) - (b.x + b.w / 2 + b.y + b.d / 2));
+    return towers;
+  })();
+
+  const ISO_C = Math.cos(Math.PI / 6), ISO_S = .5;
+
+  /** 画城并返回词条可停靠的锚点(各塔可见立面上的点)。 */
+  function drawCity() {
+    const svg = $('#city-svg'), host = $('#driftfield');
+    if (!svg || !host || !host.clientWidth) return;
+    const W = host.clientWidth, H = host.clientHeight, narrow = driftNarrow.matches;
+    const iso = (x, y, z) => [(x - y) * ISO_C, (x + y) * ISO_S - z];
+    let minX = Infinity, maxX = -Infinity, maxY = -Infinity;
+    CITY.forEach(t => [[t.x, t.y], [t.x + t.w, t.y], [t.x + t.w, t.y + t.d], [t.x, t.y + t.d]].forEach(([x, y]) => {
+      const [sx, sy] = iso(x, y, 0);
+      minX = Math.min(minX, sx); maxX = Math.max(maxX, sx); maxY = Math.max(maxY, sy);
+    }));
+    // 按宽度铺满并略微出血,底边落在容器底部;太高的塔顶被上沿裁掉,读起来像"楼延伸出画面"
+    const k = W * (narrow ? 1.02 : 1.08) / (maxX - minX);
+    const tx = W * (narrow ? .5 : .56) - (minX + maxX) / 2 * k, ty = H * .97 - maxY * k;
+    const P = (x, y, z) => { const [sx, sy] = iso(x, y, z); return [tx + sx * k, ty + sy * k]; };
+    const pts = arr => arr.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+    const line = (a, b, cls) => '<line class="' + cls + '" x1="' + a[0].toFixed(1) + '" y1="' + a[1].toFixed(1) +
+      '" x2="' + b[0].toFixed(1) + '" y2="' + b[1].toFixed(1) + '"></line>';
+
+    let out = '<defs>' +
+      '<linearGradient id="cg-face" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFFFFF" stop-opacity=".58"/>' +
+        '<stop offset=".55" stop-color="#FFFFFF" stop-opacity=".22"/><stop offset="1" stop-color="#FBF7EF" stop-opacity=".06"/></linearGradient>' +
+      '<linearGradient id="cg-side" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#DCD3C4" stop-opacity=".62"/>' +
+        '<stop offset="1" stop-color="#D8CFBF" stop-opacity=".12"/></linearGradient>' +
+      '<linearGradient id="cg-lit" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFF6E6" stop-opacity=".7"/>' +
+        '<stop offset=".5" stop-color="#F4DDB6" stop-opacity=".42"/><stop offset="1" stop-color="#EFD3A4" stop-opacity=".1"/></linearGradient>' +
+      '<radialGradient id="cg-glow"><stop offset="0" stop-color="#F2D6A6" stop-opacity=".38"/>' +
+        '<stop offset=".45" stop-color="#F3DFBF" stop-opacity=".16"/><stop offset="1" stop-color="#F5EBDD" stop-opacity="0"/></radialGradient>' +
+      '<filter id="cf-soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="' + (narrow ? 10 : 16) + '"/></filter>' +
+      '<linearGradient id="cg-base" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#D9D1C3" stop-opacity="0"/>' +
+        '<stop offset=".55" stop-color="#D6CDBD" stop-opacity=".2"/><stop offset="1" stop-color="#CFC5B3" stop-opacity=".34"/></linearGradient>' +
+      '<linearGradient id="cg-mist" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F4F1EB" stop-opacity="0"/>' +
+        '<stop offset="1" stop-color="#F4F1EB" stop-opacity=".92"/></linearGradient>' +
+      '</defs>';
+    // 底色:右下略深的暖灰,白玻璃才有东西可以"透";纯纸白底上玻璃会读成白盒子
+    out += '<rect fill="url(#cg-base)" width="' + W + '" height="' + H + '"></rect>';
+    // 光:一团很淡的暖光在城中偏后,外加两道柔化的竖向光带。强度刻意压低。
+    out += '<ellipse fill="url(#cg-glow)" cx="' + (W * .5).toFixed(0) + '" cy="' + (H * .46).toFixed(0) +
+      '" rx="' + (W * .46).toFixed(0) + '" ry="' + (H * .5).toFixed(0) + '"></ellipse>';
+    const anchors = [];
+    CITY.forEach((t, order) => {
+      const A0 = P(t.x, t.y, 0), B0 = P(t.x + t.w, t.y, 0), C0 = P(t.x + t.w, t.y + t.d, 0), D0 = P(t.x, t.y + t.d, 0);
+      const A1 = P(t.x, t.y, t.h), B1 = P(t.x + t.w, t.y, t.h), C1 = P(t.x + t.w, t.y + t.d, t.h), D1 = P(t.x, t.y + t.d, t.h);
+      // 空气透视:越靠后越淡
+      out += '<g class="tw' + (t.lit ? ' lit' : '') + '" opacity="' + (.55 + .45 * order / (CITY.length - 1)).toFixed(2) + '">';
+      // 背面棱线先画、很淡 —— 透过玻璃看得见后面的结构,这是"玻璃"而不是"白盒子"的关键
+      out += line(A0, A1, 'e-back') + line(A1, B1, 'e-back') + line(A1, D1, 'e-back');
+      out += '<polygon class="f-left" fill="url(#' + (t.lit ? 'cg-lit' : 'cg-face') + ')" points="' + pts([D0, C0, C1, D1]) + '"></polygon>';
+      out += '<polygon class="f-right" fill="url(#cg-side)" points="' + pts([B0, C0, C1, B1]) + '"></polygon>';
+      out += '<polygon class="f-top" points="' + pts([A1, B1, C1, D1]) + '"></polygon>';
+      // 宽面上的一道斜向反光带(u 沿面宽,v 沿高度)
+      const faceW = Math.hypot(C0[0] - D0[0], C0[1] - D0[1]);
+      const on = (u, v) => [D0[0] + (C0[0] - D0[0]) * u, D0[1] + (C0[1] - D0[1]) * u + (D1[1] - D0[1]) * v];
+      if (faceW > 26) {
+        const u = .08 + ((t.x * 7 + t.y * 3) % 1) * .4;
+        out += '<polygon class="refl" points="' + pts([on(u, .18), on(Math.min(1, u + .14), .18),
+          on(Math.min(1, u + .44), .92), on(Math.min(1, u + .3), .92)]) + '"></polygon>';
+      }
+      // 竖向窗棂,只画在宽的那一面
+      const n = Math.min(9, Math.floor(faceW / 11));
+      for (let i = 1; i < n; i++) {
+        const f = i / n, lerp = (a, b) => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+        out += line(lerp(D0, C0), lerp(D1, C1), 'mull');
+      }
+      // 玻璃板厚度:前棱内侧再压一条亮线,右立面紧挨前棱一条暗线
+      const inset = (a, b, f) => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+      const th = Math.min(.12, 4 / Math.max(faceW, 1));
+      out += line(inset(C0, D0, th), inset(C1, D1, th), 'e-inner');
+      out += line(inset(C0, B0, .1), inset(C1, B1, .1), 'e-shade');
+      out += line(B0, B1, 'e-side') + line(D0, D1, 'e-side') + line(C0, C1, 'e-front');
+      out += '<polyline class="e-top" points="' + pts([D1, C1, B1]) + '"></polyline>';
+      out += '</g>';
+      // 锚点:左立面(宽面)与右立面中线上,从塔身中段到上段取三档
+      [[D0, C0, D1, C1], [B0, C0, B1, C1]].forEach(([g0, g1, u0, u1]) => {
+        [.42, .6, .78].forEach(zf => {
+          const bx = (g0[0] + g1[0]) / 2, by = (g0[1] + g1[1]) / 2, ux = (u0[0] + u1[0]) / 2, uy = (u0[1] + u1[1]) / 2;
+          anchors.push({ x: bx + (ux - bx) * zf, y: by + (uy - by) * zf });
+        });
+      });
+    });
+    out += '<rect class="shaft" filter="url(#cf-soft)" x="' + (W * .47).toFixed(0) + '" y="' + (H * .05).toFixed(0) +
+      '" width="' + (narrow ? 10 : 18) + '" height="' + (H * .7).toFixed(0) + '"></rect>';
+    out += '<rect class="shaft dim" filter="url(#cf-soft)" x="' + (W * .63).toFixed(0) + '" y="' + (H * .18).toFixed(0) +
+      '" width="' + (narrow ? 8 : 12) + '" height="' + (H * .55).toFixed(0) + '"></rect>';
+    // 底部薄雾,让楼脚化进纸面
+    out += '<rect fill="url(#cg-mist)" y="' + (H * .72).toFixed(0) + '" width="' + W + '" height="' + (H * .28).toFixed(0) + '"></rect>';
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svg.innerHTML = out;
+    drift.anchors = anchors;
+  }
+
+  /** 从玻璃立面锚点里抽一个放词条:整张卡片在容器内、不压别的词条、不压标题/输入栏,
+   *  换位时离开原位足够远。锚点来自 drawCity,所以词条总是"长"在楼上。 */
+  function findDriftPosition(slot, previous = null) {
+    const host = $('#driftfield');
+    const W = host.clientWidth, H = host.clientHeight, w = slot.offsetWidth, ht = slot.offsetHeight;
+    const pad = 12, gap = driftNarrow.matches ? 10 : 16;
+    const occupied = Array.from(host.children)
+      .filter(other => other !== slot && other.dataset.placed === 'true').map(driftRect);
+    const blocked = occupied.concat(driftAvoidRects(host));
+    // 左侧 22% 是渐隐带,词条放进去会半透明、读不清
+    const minX = driftNarrow.matches ? pad : W * .22;
+    const candidates = [];
+    for (const a of shuffleDrift(drift.anchors)) {
+      const x = a.x - w * .35, y = a.y - ht / 2;
+      if (x < minX || y < pad || x + w > W - pad || y + ht > H - pad) continue;
+      if (blocked.some(r => x < r.x + r.w + gap && x + w + gap > r.x &&
+        y < r.y + r.h + gap && y + ht + gap > r.y)) continue;
+      if (previous && Math.hypot(x - previous.x, y - previous.y) < Math.min(90, W * .18)) continue;
+      // 离已有词条越远分越高,避免几张挤在同一栋楼上
+      const spread = occupied.length ? Math.min(...occupied.map(r =>
+        Math.hypot((x + w / 2 - r.x - r.w / 2) / W, (y + ht / 2 - r.y - r.h / 2) / H))) : Math.random();
+      candidates.push({ x, y, spread });
+    }
+    // 在分布最开的几个候选里抽签:既散开,又不是每次同一个位置
+    candidates.sort((a, b) => b.spread - a.spread);
+    return candidates[Math.floor(Math.random() * Math.min(6, candidates.length))] || null;
+  }
+
+  function placeDriftSlot(slot, position) {
+    slot.style.left = Math.round(position.x) + 'px';
+    slot.style.top = Math.round(position.y) + 'px';
+    slot.dataset.placed = 'true';
+  }
+
+  function layoutDrift() {
+    const host = $('#driftfield');
+    if (!host.clientWidth) return;
+    let slots = Array.from(host.children);
+    let fitted = false;
+    for (;;) {
+      const largestFirst = slots.slice().sort((a, b) =>
+        b.offsetWidth * b.offsetHeight - a.offsetWidth * a.offsetHeight);
+      for (let attempt = 0; attempt < 12 && !fitted; attempt++) {
+        slots.forEach(slot => { slot.dataset.placed = 'false'; });
+        fitted = largestFirst.every(slot => {
+          const position = findDriftPosition(slot);
+          if (!position) return false;
+          placeDriftSlot(slot, position);
+          return true;
+        });
+      }
+      if (fitted || !slots.length) break;
+      // 楼面上放不下就少放一张,词回到待轮换的袋子里 —— 宁可少,不压标题、不压输入栏。
+      const drop = slots.pop();
+      drift.bag.push(drop.dataset.query);
+      drop.remove();
+    }
+    drift.size = host.clientWidth + ':' + host.clientHeight;
+  }
+
+  function scheduleDrift() {
+    clearTimeout(drift.cycle);
+    drift.cycle = null;
+    if (!driftCanRotate()) return;
+    drift.cycle = setTimeout(rotateDrift, (driftReduced.matches ? 5000 : 1800) + Math.random() * 1400);
+  }
+
+  function rotateDrift() {
+    drift.cycle = null;
+    if (!driftCanRotate()) return;
+    const slots = Array.from($('#driftfield').children);
+    const visible = new Set(slots.map(slot => slot.dataset.query));
+    drift.bag = drift.bag.filter(text => !visible.has(text));
+    if (!drift.bag.length) drift.bag = shuffleDrift(T.chips.filter(text => !visible.has(text)));
+    if (!drift.bag.length || !slots.length) return;
+    const choices = slots.map((_, i) => i).filter(i => i !== drift.lastSlot || slots.length === 1);
+    const index = choices[Math.floor(Math.random() * choices.length)];
+    const slot = slots[index];
+    const previous = driftRect(slot);
+    animateDrift(slot, false, () => {
+      driftLater(() => {
+        if (!driftCanRotate()) { stopDrift(); return; }
+        const oldText = slot.dataset.query;
+        fillDriftSlot(slot, drift.bag[0]);
+        const position = findDriftPosition(slot, previous);
+        if (position) {
+          placeDriftSlot(slot, position);
+          drift.bag.shift();
+        } else {
+          // 空间不足时保留原卡片,不把新词硬塞进会重叠的位置。
+          fillDriftSlot(slot, oldText);
+        }
+        drift.lastSlot = index;
+        animateDrift(slot, true);
+        scheduleDrift();
+      }, driftReduced.matches ? 80 : 180);
+    });
+  }
+
+  function renderDrift() {
+    stopDrift();
+    const host = $('#driftfield');
+    if (!host) return;
+    host.replaceChildren();
     if ($('#app').dataset.stage !== 'welcome') return;
-    clearTimeout(driftTimer);
-    driftTimer = setTimeout(renderDrift, 200);
-  });
+    const pool = shuffleDrift(T.chips || []);
+    const count = Math.min(driftNarrow.matches ? 3 : 4, pool.length);
+    drift.bag = pool.slice(count);
+    drift.lastSlot = -1;
+    pool.slice(0, count).forEach(text => {
+      const slot = h('div', 'drift-slot');
+      fillDriftSlot(slot, text);
+      host.appendChild(slot);
+    });
+    drawCity();
+    layoutDrift();
+    if (driftCanRotate()) Array.from(host.children).forEach(slot => animateDrift(slot, true));
+    scheduleDrift();
+  }
+
+  function updateDriftControl() {
+    const btn = $('#btn-drift');
+    btn.textContent = drift.paused ? T.driftResume : T.driftPause;
+    btn.setAttribute('aria-pressed', String(drift.paused));
+  }
+
+  driftNarrow.addEventListener('change', renderDrift);
+  driftReduced.addEventListener('change', () => { stopDrift(); scheduleDrift(); });
+  document.addEventListener('visibilitychange', () => { stopDrift(); scheduleDrift(); });
+  new ResizeObserver(() => {
+    const host = $('#driftfield');
+    const size = host.clientWidth + ':' + host.clientHeight;
+    if ($('#app').dataset.stage !== 'welcome' || size === drift.size) return;
+    stopDrift();
+    drawCity();
+    layoutDrift();
+    scheduleDrift();
+  }).observe($('#driftfield'));
 
   // ---------------------------------------------------------------- 语言切换
 
@@ -1757,13 +2491,33 @@
     document.documentElement.lang = T.htmlLang;
     document.title = T.title;
     const set = (sel, text) => { const e = $(sel); if (e) e.textContent = text; };
-    set('.brand', T.brand);
-    set('#btn-assume', T.btnAssume);
+    set('.brand-name', T.brandName);
+    $('#brand-home').setAttribute('aria-label', `${T.brand} · ${T.brandHome}`);
+    $('#brand-home').title = T.brandHome;
     set('#btn-new', T.btnNew);
-    set('.welcome-h', T.welcomeH);
+    // 文案表是本地常量(含 <br>),不是用户输入,可以走 innerHTML
+    const wh = $('.welcome-h'); if (wh) wh.innerHTML = T.welcomeH;
+    (T.rail || []).forEach((label, i) => set('#rail-' + (i + 1), label));
+    set('#hero-foot', T.heroFoot);
+    $('#city-btn').setAttribute('aria-label', T.cityPick); $('#city-btn').title = T.cityPick;
+    $('.map-ctl').setAttribute('aria-label', T.mapControls);
+    for (const [id, k] of [['#map-fit', 'mapFit'], ['#map-zin', 'zoomIn'], ['#map-zout', 'zoomOut']]) { $(id).setAttribute('aria-label', T[k]); $(id).title = T[k]; }
+    if (!$('#city-menu').hidden) renderCityMenu();
+    if ($('#map-count').textContent) setMapCount(resultView().metrics.length);
+    set('#drift-label', T.driftLabel);
+    updateDriftControl();
     const wp = $('.welcome-p'); if (wp) wp.innerHTML = T.welcomeP;
     renderDrift();
-    const inp = $('#input'); if (inp) inp.placeholder = T.inputPlaceholder;
+    const inp = $('#input'); if (inp) { inp.placeholder = $('#app').dataset.stage === 'working' ? T.workingPlaceholder : T.inputPlaceholder; inp.setAttribute('aria-label', inp.placeholder); }
+    $('#chat').setAttribute('role', 'region'); $('#chat').setAttribute('aria-label', T.conversationAria); $('#chat').tabIndex = 0;
+    $('#condition-dock').setAttribute('role', 'region'); $('#condition-dock').setAttribute('aria-label', T.filterAria);
+    const followUps = $('#follow-ups'); followUps.replaceChildren(h('span', 'follow-label', T.tryFollowUp + ':'));
+    for (const text of T.followUps) {
+      const b = h('button', 'follow-up', text); b.type = 'button';
+      // 只是填入草稿,由用户确认发送,不自动覆盖已经写好的需求。
+      b.addEventListener('click', () => { inp.value = inp.value.trim() ? inp.value.trim() + (state.lang === 'zh' ? '，' : ', ') + text : text; inp.focus(); });
+      followUps.appendChild(b);
+    }
     const snd = $('#composer .send'); if (snd) snd.setAttribute('aria-label', T.sendAria);
     const det = $('#detail'); if (det) det.setAttribute('aria-label', T.detailAria);
     const lb = $('#btn-lang'); if (lb) { lb.textContent = T.switchTo; lb.title = T.switchTitle; }
@@ -1783,10 +2537,12 @@
    */
   async function setLang(lang) {
     if (lang === state.lang || state.running) return;
+    returnToLatest();
     state.lang = lang;
     T = window.I18N[lang] || window.I18N.zh;
     try { localStorage.setItem('lang', lang); } catch (_) { /* 隐私模式下会抛,不影响功能 */ }
     applyStaticText();
+    window.dispatchEvent(new CustomEvent('nw:lang', { detail: lang }));   // 首屏沙盘的信息牌跟着换语言
     state.meta = await fetch('/api/meta?lang=' + lang).then(r => r.json());
     if (state.params) renderConditions();
     if (state.metrics.length) renderResults(); else renderResultsHead();
@@ -1804,23 +2560,46 @@
     // 上次选的语言。读不到就按中文 —— 这是这个项目的母语,也是数据的语言。
     try { state.lang = localStorage.getItem('lang') === 'en' ? 'en' : 'zh'; } catch (_) { /* 忽略 */ }
     T = window.I18N[state.lang];
+    initMapPanel();
     applyStaticText();
     metaReady = fetch('/api/meta?lang=' + state.lang).then(r => r.json()).then(j => { state.meta = j; });
     newThread();
     $('#composer').addEventListener('submit', ev => { ev.preventDefault(); const t = $('#input').value.trim(); if (!t) return; $('#input').value = ''; send(t); });
+    // 首屏沙盘信息牌:点击即按该问句搜索(与首屏词条同一条路径)
+    window.addEventListener('nw:query', e => { if (state.running || !e.detail) return; $('#input').value = ''; send(e.detail); });
+    window.addEventListener('nw:showroom', stopDrift);
     $('#btn-new').addEventListener('click', resetAll);
-    $('#btn-assume').addEventListener('click', showAssumptions);
+    $('#brand-home').addEventListener('click', () => { if ($('#app').dataset.stage !== 'welcome') resetAll(); });
+    // 收藏夹(favorites.js)打开任意一套的详情:数据由 /api/property/{id} 现算,与搜索结果同一口径
+    window.nwOpenDetail = m => openDetail(m);
+    window.nwCompareIds = compareIds;                 // 收藏夹多选「并排打开」
     $('#btn-lang').addEventListener('click', () => setLang(state.lang === 'zh' ? 'en' : 'zh'));
-    // 字体加载完再摆一次:首屏这几条的宽度是拿来算坐标的,而字体没到位时
-    // 量到的是回退字体的宽度 —— 差几十像素,词条就可能压到标题上。
-    if (document.fonts && document.fonts.ready) {
-      document.fonts.ready.then(() => {
-        if ($('#app').dataset.stage === 'welcome') renderDrift();
-      });
-    }
+    $('#btn-drift').addEventListener('click', () => {
+      drift.paused = !drift.paused;
+      updateDriftControl();
+      stopDrift();
+      scheduleDrift();
+    });
+    const driftHost = $('#driftfield');
+    driftHost.addEventListener('pointerover', e => {
+      if (driftPointer.matches && e.target.closest('.drift-chip')) stopDrift();
+    });
+    driftHost.addEventListener('pointerout', e => {
+      if (driftPointer.matches && e.target.closest('.drift-chip') &&
+        !e.target.closest('.drift-chip').contains(e.relatedTarget)) scheduleDrift();
+    });
+    driftHost.addEventListener('focusin', stopDrift);
+    driftHost.addEventListener('focusout', () => driftLater(scheduleDrift, 0));
+    $('#input').addEventListener('input', () => { stopDrift(); scheduleDrift(); });
+    document.fonts.ready.then(() => {
+      if ($('#app').dataset.stage !== 'welcome') return;
+      stopDrift();
+      layoutDrift();
+      scheduleDrift();
+    });
     // Esc 现在任何宽度都能关详情 —— 它已经是覆盖层了,窄屏抽屉、宽屏右侧滑出,
     // 两种都需要一个键盘出口
-    document.addEventListener('keydown', ev => { if (ev.key === 'Escape') { closePopover(); closeSheet(); } });
+    document.addEventListener('keydown', ev => { if (ev.key !== 'Escape') return; if (closeCityMenu()) return; if (picker) { closePicker(); return; } closePopover(); closeSheet({ user: true }); });
     await metaReady;
   }
   init();

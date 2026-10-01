@@ -14,6 +14,7 @@
 """
 
 import json
+import math
 import re
 from pathlib import Path
 
@@ -24,8 +25,45 @@ _MODEL_DIR = Path(__file__).resolve().parents[2] / "models"
 _MODEL_PATH = _MODEL_DIR / "valuation_xgb.ubj"
 _META_PATH = _MODEL_DIR / "valuation_meta.json"
 
+# 库内房源的离折估值(见 crossfit_valuation.py)。缺这个文件时退回定稿模型,不报错 ——
+# 但那样库内 80% 房源拿到的是训练集内的拟合值,测试会盯着这一点。
+OOF_PATH = _MODEL_DIR / "valuation_oof.csv"
+_OOF_FIELDS = ("address", "suburb", "price", "property_type", "bedrooms", "bathrooms", "car_spaces",
+               "land_size", "building_area", "distance_cbd", "latitude", "longitude")
+
 _model: xgb.XGBRegressor | None = None
 _meta: dict | None = None
+_oof: dict | None = None
+
+
+def _norm(value) -> str:
+    """键里的一个字段。数值统一成 10 位有效数字,空值和 NaN 都记成空串 ——
+    数据库读出来是 int/float/None,pandas 读出来是 float/NaN,两边必须写成同一个字符串。"""
+    if value is None:
+        return ""
+    if isinstance(value, (int, float)):
+        return "" if math.isnan(float(value)) else format(float(value), ".10g")
+    text = str(value).strip().lower()
+    return "" if text in ("nan", "none") else text
+
+
+def oof_key(row: dict) -> str:
+    """一套库内房源的离折估值查找键:地址、区、成交价 + 全部模型特征。
+    任何一个字段变了(队友重新下载数据、改了一列),键就对不上,退回定稿模型 —— 不给过期的估值。"""
+    return "|".join(_norm(row.get(f)) for f in _OOF_FIELDS)
+
+
+def _load_oof() -> dict:
+    global _oof
+    if _oof is None:
+        table = {}
+        if OOF_PATH.exists():
+            import csv
+            with OOF_PATH.open(encoding="utf-8") as handle:
+                for rec in csv.DictReader(handle):
+                    table[rec["key"]] = float(rec["log_pred"])
+        _oof = table
+    return _oof
 
 
 def _load():
@@ -38,9 +76,12 @@ def _load():
                 f"估值模型文件缺失({_MODEL_PATH.name} / {_META_PATH.name})。"
                 "请先运行:python -m app.analytics.train_valuation"
             )
-        _meta = json.loads(_META_PATH.read_text(encoding="utf-8"))
-        _model = xgb.XGBRegressor(enable_categorical=True)
-        _model.load_model(_MODEL_PATH)
+        # 先在局部变量里加载完,再一次性赋给全局。反过来写的话,并发的第二个调用会看到
+        # `_model` 已经不是 None、却还没 load_model,直接抛 NotFittedError(审计 BUG-10)。
+        meta = json.loads(_META_PATH.read_text(encoding="utf-8"))
+        model = xgb.XGBRegressor(enable_categorical=True)
+        model.load_model(_MODEL_PATH)
+        _meta, _model = meta, model
     return _model, _meta
 
 
@@ -113,15 +154,40 @@ def _error_for(property_type, meta: dict) -> float:
     return float(meta["metrics"]["mdape"])
 
 
-def _wrap(pred: float, err: float, meta: dict) -> dict:
-    return {
+def _interval_for(property_type, meta: dict) -> dict | None:
+    """取这一类房型的保形区间参数(calibrate_valuation.py 算出并写进 meta)。
+
+    meta 里没有 conformal 段时返回 None —— **不退回任何估计值**。区间的全部意义在于
+    "说 80% 就是 80%",没校准过的区间宁可不给。
+    """
+    conf = meta.get("conformal")
+    if not conf:
+        return None
+    level = conf["display_level"]
+    table = conf["levels"][str(level)]
+    info = table.get(str(property_type)) or table["__all__"]
+    return {"level": level, "q": info["q"], "coverage": info["coverage_mean"]}
+
+
+def _wrap(pred: float, err: float, interval: dict | None, meta: dict) -> dict:
+    out = {
         "predicted_price": int(round(pred)),
         "is_stub": False,
         "model": meta["algorithm"],
         "typical_error_pct": err,
         "range_low": int(round(pred * (1 - err))),
         "range_high": int(round(pred * (1 + err))),
+        "interval_level": None, "interval_low": None, "interval_high": None, "interval_coverage": None,
     }
+    if interval:
+        out.update({
+            "interval_level": interval["level"],
+            # 对数误差上的对称区间,换回价格后下窄上宽(-17% / +21% 这种),这是房价右偏的正常形态
+            "interval_low": int(round(pred * math.exp(-interval["q"]))),
+            "interval_high": int(round(pred * math.exp(interval["q"]))),
+            "interval_coverage": interval["coverage"],
+        })
+    return out
 
 
 def predict_value(features: dict) -> dict:
@@ -135,6 +201,10 @@ def predict_value(features: dict) -> dict:
         range_low/high    predicted_price × (1 ∓ typical_error_pct)。
                           实测约一半的房子落在这个区间内 —— 这是它的确切含义,
                           **不是「95% 置信区间」**,别在文档里写成那个。
+        interval_level    保形区间的标称把握(0.8)。meta 未校准时为 None
+        interval_low/high 分房型的分割保形区间:在模型没见过的成交上校准,
+                          真实价格落入的比例经验证约为 interval_level
+        interval_coverage 实测覆盖率(留出集随机对半 500 次的平均值)
     """
     return predict_values([features])[0]
 
@@ -152,8 +222,15 @@ def predict_values(rows: list[dict]) -> list[dict]:
 
     model, meta = _load()
     # 训练目标是 log(price),所以预测出来要指数还原。
-    preds = np.exp(model.predict(_to_frame(rows, meta)))
-    return [
-        _wrap(float(p), _error_for(r.get("property_type"), meta), meta)
-        for p, r in zip(preds, rows)
-    ]
+    log_preds = model.predict(_to_frame(rows, meta))
+    # 库内房源换成离折估值:来自没见过这套房的模型。调用方要把 address 和 price 一起传进来才查得到;
+    # 查不到(库外输入、数据被改过)就用定稿模型,并在 cross_fitted 里如实标出来。
+    oof = _load_oof()
+    out = []
+    for lp, r in zip(log_preds, rows):
+        hit = oof.get(oof_key(r)) if oof and r.get("price") else None
+        item = _wrap(float(np.exp(hit if hit is not None else lp)), _error_for(r.get("property_type"), meta),
+                     _interval_for(r.get("property_type"), meta), meta)
+        item["cross_fitted"] = hit is not None
+        out.append(item)
+    return out

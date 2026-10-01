@@ -189,7 +189,9 @@ If a file starts feeling like a diary, it is already wrong.
 
 - **Language.** `AGENTS.md` and `CLAUDE.md` are English (machine-facing protocol).
   `docs/*` and the long-form engineering record are **Chinese**, matching the rest of the
-  repo and its code comments. Keep structural headings (`Now`, `Done`, `Completed
+  repo and its code comments. Exception: the team-facing guides `README.md` and
+  `docs/en/*.md` are **English** (setup, features, configuration for teammates); keep them
+  in step when setup steps, features or settings change. Keep structural headings (`Now`, `Done`, `Completed
   Features`, …) in English so they stay greppable.
 - **`NOTES_FOR_SUPERVISOR.md` is the long-form archive**, written for the human supervisor:
   full rationale, measurements, dead ends. `docs/DECISIONS.md` is the short index into it —

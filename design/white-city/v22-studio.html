@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f6f5f1">
+  <title>筑明AI · 城市柔光</title>
+  <link rel="stylesheet" href="layout-studio-v22.css?v=1">
+  <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head>
+<body>
+  <header>
+    <div><p class="eyebrow">NESTWISE / CITY STUDIO 15 · 副本</p><h1>城市柔光。</h1></div>
+    <nav class="modes" aria-label="查看效果">
+      <button data-mode="studio" aria-pressed="true">灯光效果</button>
+      <button data-mode="clay" aria-pressed="false">白模对照</button>
+      <button data-mode="cycles" aria-pressed="false">Cycles 对照</button>
+    </nav>
+  </header>
+  <div class="subbar"><p id="summary">固定机位 · 白色城市 · 局部暖光</p><p class="lock"><span aria-hidden="true">○</span> 机位已锁定</p></div>
+  <main id="workspace" aria-label="固定机位城市效果">
+    <div id="viewport" aria-label="真实三维城市模型" data-loaded="false" data-mode="studio"></div>
+    <figure id="cycles-pane" hidden><img id="cycles-image" alt="同一机位的 Cycles 离线渲染对照" decoding="async"></figure>
+    <div class="view-label" id="view-label">灯光效果 · 三维模型</div>
+    <div id="loading" role="status" aria-live="polite"><span id="loading-copy">正在准备城市灯光…</span><button id="retry" hidden>重新加载</button></div>
+  </main>
+  <footer>
+    <div><p class="phase">固定构图 · 灯光校准 v22(副本,原版 v21 未改动)</p><p id="detail">v22 副本：去除 MSAA 顶点色噪点；四层光 —— 烘焙柔光、浅阴影、局部暖光、轻辉光。</p></div>
+    <div class="downloads"><a href="blender/city-14-studio.blend" download>Blender 工程</a><a href="blender/city-14-studio-baked.glb" download>三维模型</a><a href="v20-layout.html?view=camera">布局版本</a></div>
+  </footer>
+  <script type="module" src="layout-studio-v22.mjs?v=1"></script>
+</body>
+</html>

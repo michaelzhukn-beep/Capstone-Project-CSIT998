@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>白模城市 · 光照 07 · 筑明AI</title>
+<style>
+:root{color-scheme:light;font-family:system-ui,"Microsoft YaHei",sans-serif;color:#33372f;background:#f5f4f0}
+*{box-sizing:border-box}body{margin:0}button,a{font:inherit;color:inherit}button{cursor:pointer}a{text-decoration:none}
+header{position:fixed;z-index:3;inset:0 0 auto;display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:22px 32px;background:linear-gradient(#f5f4f0 55%,#f5f4f000)}
+.brand{font-weight:650;white-space:nowrap}.brand small{display:block;font-size:11px;font-weight:400;letter-spacing:.06em;margin-top:6px;color:#7d8175}
+.tools{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px 18px}nav{display:flex;gap:5px;flex-wrap:wrap}button{border:1px solid #dcded6;border-radius:24px;background:#ffffffc4;padding:9px 14px;font-size:12px}button[aria-pressed=true]{background:#343a2d;color:white;border-color:#343a2d}button:disabled{opacity:.45;cursor:default}
+button:focus-visible,a:focus-visible{outline:2px solid #798668;outline-offset:4px}
+#viewport{position:fixed;inset:0;touch-action:none}canvas{display:block;width:100%;height:100%}
+#sample{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;background:#f5f4f0}[hidden]{display:none!important}
+.status{position:fixed;left:32px;bottom:26px;right:32px;display:flex;align-items:flex-end;justify-content:space-between;gap:20px;pointer-events:none;font-size:12px;color:#636b5a;line-height:1.8}
+.journey-tools{margin-top:10px}.journey-tools label{pointer-events:auto}.journey-tools select{font:inherit;padding:5px;background:white;border:1px solid #dcded6;border-radius:12px}.status a,.status button{pointer-events:auto}.status a{text-decoration:underline;text-underline-offset:4px}.status p{margin:0}.status strong{font-weight:500}.camera-tools{margin-top:10px}.camera-tools button{padding:6px 12px;font-size:11px}.files{text-align:right}
+#message{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:85vw;text-align:center;font-size:13px;color:#636b5a;background:#f5f4f0ef;border-radius:12px;padding:16px 24px}
+@media(max-width:700px){header{padding:16px;gap:12px}.brand small{font-size:9px}.tools{gap:7px;max-width:260px}.tools nav{justify-content:flex-end}button{font-size:10px;padding:7px 10px}.status{left:16px;right:16px;bottom:16px;font-size:10px}.files{max-width:150px}.camera-tools button{font-size:10px}}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head>
+<body>
+<div id="viewport" aria-label="真实三维城市模型，可拖动旋转"></div>
+<img id="sample" alt="同一模型的 Cycles 实际渲染" hidden>
+<header><div class="brand">筑明AI<small>白模城市 · 白境光照 07</small></div><div class="tools">
+<a href="v13-districts.html" style="font-size:12px;padding:9px 0;text-decoration:underline">上一版 06</a><nav aria-label="灯光对比"><button data-light="baseline" aria-pressed="false">日光对照</button><button data-light="refined" aria-pressed="true">白境暖光</button><button id="warm" aria-pressed="true">室内暖光</button><button id="baked" aria-pressed="true">局部烘焙</button><button id="contacts" aria-pressed="true">接触层次</button></nav>
+<nav aria-label="查看方式"><button data-view="model" aria-pressed="false">旧版固定场景</button><button data-view="journey" aria-pressed="true">持续巡游</button><button data-view="detail" aria-pressed="false">05 近景参考</button><button data-view="render" aria-pressed="false">07 Cycles 全景</button><button id="wire" aria-pressed="false" disabled>线框</button></nav>
+</div></header>
+<p id="message" role="status">正在加载真实模型…</p>
+<footer class="status"><div><strong id="mode">03 · 真实几何检查</strong><p id="hint">拖动旋转 · 滚轮缩放；切换版本保留视角</p>
+<nav class="camera-tools" aria-label="检查机位"><button data-camera="reference">参考机位</button><button id="unlock" aria-pressed="false">解锁视角</button><button data-camera="waterfront">河岸机位</button><button data-camera="plan">俯视机位</button></nav>
+<nav class="journey-tools" aria-label="巡游控制" hidden><button id="play" aria-pressed="true">暂停巡游</button><button id="ahead">前行 3 公里</button><button id="restart">回到起点</button><label>速度 <select id="speed"><option value="1">1×</option><option value="4">4×</option></select></label></nav><p id="journey-status" hidden></p>
+</div><div class="files"><a id="blend" href="blender/city-04.blend" download>灯光参考工程</a> · <a id="glb" href="blender/city-04.glb" download>建筑源模型</a><p>参考机位已锁定 · 可切换同机位灯光</p><p id="render-note">真实模型 · Cycles 为上一版固定场景的光照参考</p></div></footer>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import {createDistrictStream} from './city-districts.mjs?v=07.1';
+import {createJourneyClock} from './city-stream-layout.mjs';
+import {createCityLighting} from './city-lighting-07.mjs?v=07.1';
+const view=await fetch('./city-view.json').then(r=>{if(!r.ok)throw new Error('Camera preset unavailable');return r.json();});
+const host=document.querySelector('#viewport'),sample=document.querySelector('#sample'),message=document.querySelector('#message'),wire=document.querySelector('#wire');
+let selected='journey',version='04',dirty=true,model=null,refined=true,unlocked=false,referenceCamera=true,streamRevision=-1;
+let storedCamera=null;
+const reduced=matchMedia('(prefers-reduced-motion: reduce)'),clock=createJourneyClock();clock.playing=false;
+let stream=null,streamLoading=null,lastStats=0;
+const cache=new Map(),pending=new Map(),scene=new THREE.Scene();scene.background=new THREE.Color('#f5f4f0');
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.setSize(innerWidth,innerHeight);renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=.95;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.shadowMap.autoUpdate=false;host.append(renderer.domElement);
+const camera=new THREE.PerspectiveCamera(view.verticalFov,innerWidth/innerHeight,view.near,view.far);
+const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.dampingFactor=.09;controls.minDistance=35;controls.maxDistance=900;controls.maxPolarAngle=Math.PI*.495;
+function fitReference(){camera.fov=THREE.MathUtils.radToDeg(2*Math.atan(Math.tan(THREE.MathUtils.degToRad(view.verticalFov/2))*Math.max(1,view.referenceAspect/camera.aspect)));camera.updateProjectionMatrix();}
+function applyReference(){controls.enableDamping=false;controls.update();camera.position.fromArray(view.position);controls.target.fromArray(view.target);fitReference();controls.update();controls.enableDamping=true;referenceCamera=true;dirty=true;}
+applyReference();controls.enabled=false;
+controls.addEventListener('change',()=>{dirty=true;});
+controls.addEventListener('start',()=>{referenceCamera=false;});
+const lighting=createCityLighting(renderer,scene,camera);
+function exposeCamera(){host.dataset.camera=JSON.stringify({position:camera.position.toArray(),target:controls.target.toArray(),fov:camera.fov,preset:view.id,locked:!controls.enabled});host.dataset.lighting=JSON.stringify(lighting.stats());}
+function setWire(value){wire.setAttribute('aria-pressed',String(value));if(model)model.traverse(obj=>{if(obj.isMesh)for(const mat of (Array.isArray(obj.material)?obj.material:[obj.material]))mat.wireframe=value;});dirty=true;}
+function loadModel(which){
+  if(cache.has(which))return Promise.resolve(cache.get(which));
+  if(pending.has(which))return pending.get(which);
+  const promise=new Promise((resolve,reject)=>new GLTFLoader().load(`blender/city-${which}.glb`,gltf=>{
+    const item=gltf.scene;let meshes=0;item.traverse(obj=>{if(obj.isMesh){meshes++;const materials=Array.isArray(obj.material)?obj.material:[obj.material];const water=materials.some(mat=>mat.name==='Pale river - physical reflection');obj.castShadow=!water;obj.receiveShadow=!water;}});item.userData.meshCount=meshes;cache.set(which,item);resolve(item);
+  },event=>{if(version===which&&selected==='model'&&event.total)message.textContent=`正在加载 ${which} 真实模型… ${Math.round(event.loaded/event.total*100)}%`;},reject));
+  pending.set(which,promise);promise.finally(()=>pending.delete(which)).catch(()=>{});return promise;
+}
+async function showModel(){
+  const request=version;wire.disabled=true;host.dataset.loaded='loading';message.textContent=`正在加载 ${request} 真实模型…`;message.hidden=selected!=='model';
+  try{const item=await loadModel(request);if(request!==version)return;if(model)scene.remove(model);model=item;model.visible=selected==='model';scene.add(model);host.dataset.meshCount=String(item.userData.meshCount);host.dataset.version=request;host.dataset.loaded='true';setWire(wire.getAttribute('aria-pressed')==='true');wire.disabled=selected!=='model';message.hidden=true;if(selected==='model')lighting.setSource(model);renderer.shadowMap.needsUpdate=true;dirty=true;}
+  catch(error){if(request!==version)return;host.dataset.loaded='error';message.textContent='模型加载失败，请刷新页面重试。';message.hidden=selected!=='model';console.error(error);}
+}
+async function ensureStream(){
+  if(stream)return stream;
+  if(!streamLoading)streamLoading=createDistrictStream({studio:true}).then(value=>{stream=value;scene.add(stream.root);stream.root.visible=selected==='journey';return stream;}).catch(error=>{streamLoading=null;throw error;});
+  return streamLoading;
+}
+function syncPlay(){const b=document.querySelector('#play');b.textContent=clock.playing?'暂停巡游':'继续巡游';b.setAttribute('aria-pressed',String(clock.playing));}
+function updateView(){
+  const journey=selected==='journey',isModel=selected==='model',live=isModel||journey;
+  if(journey)version='04';
+  host.hidden=!live;sample.hidden=live;controls.enabled=isModel&&unlocked;
+  document.querySelector('.camera-tools').hidden=!isModel;document.querySelector('.journey-tools').hidden=!journey;document.querySelector('#journey-status').hidden=!journey;
+  wire.disabled=!isModel||!model||host.dataset.version!==version;
+  document.querySelectorAll('[data-version]').forEach(el=>{el.setAttribute('aria-pressed',String(el.dataset.version===version));el.disabled=journey;});
+  document.querySelectorAll('[data-view]').forEach(el=>el.setAttribute('aria-pressed',String(el.dataset.view===selected)));
+  document.querySelector('#blend').href=journey||selected==='render'?'blender/city-07-studio.blend':'blender/city-05.blend';document.querySelector('#blend').textContent=journey||selected==='render'?'街区 Blender 工程':'固定场景 Blender 工程';document.querySelector('#glb').href=journey?'blender/city-07-assets.glb':`blender/city-${version}.glb`;document.querySelector('#glb').textContent=journey?'建筑光照资产':'建筑源模型';
+  document.querySelector('#mode').textContent=live?`${refined?'07 白境暖光':'原日光'} · ${journey?'连续街区巡游':'04 固定场景'}`:selected==='detail'?'05 Cycles 近景参考':'07 Cycles · 巡游起点同机位';
+  document.querySelectorAll('[data-light]').forEach(el=>{el.disabled=!live;});
+  document.querySelector('#render-note').textContent=selected==='detail'?'05 历史光照参考 · 不是新街区':selected==='render'?'07 同布局实际离线渲染 · 巡游仍为真实网格':'真实网格实时渲染 · 可对照起点 Cycles 全景';
+  document.querySelector('#baked').disabled=!journey||!refined;document.querySelector('#warm').disabled=!live;document.querySelector('#contacts').disabled=!live||!refined;
+  document.querySelector('.files p').textContent=!live?'离线样张 · 返回巡游可切换实时灯光':journey?'沿参考朝向前行 · 街区与河岸连续延展':referenceCamera?'参考机位 · 可切换同机位灯光':'检查机位 · 参考机位可一键恢复';
+  document.querySelector('#hint').textContent=journey?'白底融合 · 建筑局部反弹光 · 可开始巡游':isModel?(unlocked?'拖动旋转 · 滚轮缩放；参考机位可一键恢复':(referenceCamera?'参考机位锁定 · 切换灯光保留构图':'当前机位锁定 · 可恢复参考机位')):selected==='detail'?'05 固定场景的 Cycles 光照参考；不是当前巡游街区':'与巡游起点共用街区布局和机位；离线全局光照参考';
+  message.hidden=true;if(model)model.visible=isModel;if(stream)stream.root.visible=journey;
+  scene.fog=null;
+  if(journey){
+    applyReference();controls.enabled=false;camera.lookAt(controls.target);
+    message.textContent='正在准备持续巡游…';message.hidden=Boolean(stream);clock.last=null;
+    ensureStream().then(()=>{if(selected==='journey'){message.hidden=true;stream.update(clock.distance,camera.aspect);lighting.setSource(stream.root,true);host.dataset.streamLoaded='true';dirty=true;}}).catch(error=>{console.error(error);if(selected==='journey'){message.hidden=false;message.textContent='巡游模型加载失败，请刷新重试。';}});
+  }else if(isModel){controls.enableDamping=true;if(host.dataset.version!==version)showModel();else if(model)lighting.setSource(model);}
+  else{sample.src=selected==='detail'?'blender/renders/waterfront-lighting-05.png':'blender/renders/city-07-studio.png?v=07.1';sample.alt=selected==='detail'?'05 固定场景近景光照参考':'07 巡游起点同机位 Cycles 实际渲染';}
+  syncPlay();dirty=true;renderer.shadowMap.needsUpdate=true;
+}
+document.querySelector('#play').addEventListener('click',()=>{clock.playing=!clock.playing;clock.last=null;syncPlay();dirty=true;});
+document.querySelector('#ahead').addEventListener('click',()=>{clock.seek(clock.distance+3000);dirty=true;});
+document.querySelector('#restart').addEventListener('click',()=>{clock.seek(0);dirty=true;});
+document.querySelector('#speed').addEventListener('change',()=>{clock.last=null;});
+reduced.addEventListener('change',()=>{clock.playing=false;clock.last=null;syncPlay();dirty=true;});
+sample.addEventListener('error',()=>{if(selected!=='model'){message.textContent='渲染样张加载失败，请刷新页面重试。';message.hidden=false;}});
+sample.addEventListener('load',()=>{if(selected!=='model')message.hidden=true;});
+document.querySelectorAll('[data-version]').forEach(button=>button.addEventListener('click',()=>{version=button.dataset.version;updateView();}));
+document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{const next=button.dataset.view;if(selected==='model'&&next==='journey')storedCamera={position:camera.position.clone(),target:controls.target.clone(),fov:camera.fov,reference:referenceCamera};if(next==='model'&&storedCamera){controls.enableDamping=false;camera.position.copy(storedCamera.position);controls.target.copy(storedCamera.target);camera.fov=storedCamera.fov;referenceCamera=storedCamera.reference;camera.updateProjectionMatrix();controls.update();storedCamera=null;}selected=next;updateView();}));
+wire.addEventListener('click',()=>setWire(wire.getAttribute('aria-pressed')!=='true'));
+document.querySelectorAll('[data-camera]').forEach(button=>button.addEventListener('click',()=>{
+  controls.enableDamping=false;controls.update();const preset=button.dataset.camera;
+  if(preset==='reference'){applyReference();unlocked=false;controls.enabled=false;document.querySelector('#unlock').textContent='解锁视角';document.querySelector('#unlock').setAttribute('aria-pressed','false');}
+  else{referenceCamera=false;if(preset==='waterfront'){camera.position.set(50,28,78);controls.target.set(20,8,-28);camera.fov=34;}
+    else{camera.position.set(0,600,-60);controls.target.set(0,0,-60);camera.fov=42;}camera.updateProjectionMatrix();controls.update();}
+  controls.enableDamping=true;dirty=true;updateView();
+}));
+document.querySelector('#unlock').addEventListener('click',event=>{unlocked=!unlocked;event.currentTarget.setAttribute('aria-pressed',String(unlocked));event.currentTarget.textContent=unlocked?'锁定当前视角':'解锁视角';updateView();});
+document.querySelectorAll('[data-light]').forEach(button=>button.addEventListener('click',()=>{refined=button.dataset.light==='refined';lighting.setOptions({refined});document.querySelectorAll('[data-light]').forEach(b=>b.setAttribute('aria-pressed',String((b.dataset.light==='refined')===refined)));updateView();}));
+for(const [id,option] of [['warm','warm'],['contacts','contacts'],['baked','baked']])document.querySelector('#'+id).addEventListener('click',event=>{const enabled=event.currentTarget.getAttribute('aria-pressed')!=='true';event.currentTarget.setAttribute('aria-pressed',String(enabled));lighting.setOptions({[option]:enabled});dirty=true;});
+window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;if(referenceCamera)fitReference();else camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);lighting.resize(innerWidth,innerHeight);dirty=true;});
+document.addEventListener('visibilitychange',()=>{clock.last=null;dirty=true;});
+renderer.setAnimationLoop(now=>{
+  if(document.hidden||!['model','journey'].includes(selected)){clock.last=null;return;}
+  if(selected==='journey'&&stream){
+    const before=clock.distance;clock.tick(now,true,2.4*Number(document.querySelector('#speed').value));
+    if(before!==clock.distance)dirty=true;
+    if(dirty){
+      const state=stream.update(clock.distance,camera.aspect),revision=`${state.created}:${state.recycled}`;
+      if(revision!==streamRevision){streamRevision=revision;lighting.setSource(stream.root,true);}host.dataset.journeyDistance=state.distance.toFixed(3);host.dataset.activeChunks=String(state.chunks);host.dataset.recycled=String(state.recycled);host.dataset.origin=String(state.origin);
+      if(now-lastStats>500||!clock.playing){document.querySelector('#journey-status').textContent=`场景行程 ${(state.distance/1000).toFixed(2)} 公里`;lastStats=now;}
+      renderer.shadowMap.needsUpdate=true;
+    }
+  }else controls.update();
+  if(dirty){lighting.render();exposeCamera();host.dataset.renderGeometries=String(renderer.info.memory.geometries);dirty=false;}
+});
+updateView();
+</script>
+</body></html>

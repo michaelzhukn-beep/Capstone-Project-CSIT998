@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>白模城市 03 · 筑明AI</title>
+<style>
+:root{color-scheme:light;font-family:system-ui,"Microsoft YaHei",sans-serif;color:#33372f;background:#f6f5f2}
+*{box-sizing:border-box}body{margin:0}button,a{font:inherit;color:inherit}button{cursor:pointer}a{text-decoration:none}
+header{position:fixed;z-index:3;inset:0 0 auto;display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:22px 32px;background:linear-gradient(#f6f5f2 55%,#f6f5f200)}
+.brand{font-weight:650;white-space:nowrap}.brand small{display:block;font-size:11px;font-weight:400;letter-spacing:.06em;margin-top:6px;color:#7d8175}
+.tools{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px 18px}nav{display:flex;gap:5px;flex-wrap:wrap}button{border:1px solid #dcded6;border-radius:24px;background:#ffffffc4;padding:9px 14px;font-size:12px}button[aria-pressed=true]{background:#343a2d;color:white;border-color:#343a2d}button:disabled{opacity:.45;cursor:default}
+button:focus-visible,a:focus-visible{outline:2px solid #798668;outline-offset:4px}
+#viewport{position:fixed;inset:0;touch-action:none}canvas{display:block;width:100%;height:100%}
+#sample{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;background:#f6f5f2}[hidden]{display:none!important}
+.status{position:fixed;left:32px;bottom:26px;right:32px;display:flex;align-items:flex-end;justify-content:space-between;gap:20px;pointer-events:none;font-size:12px;color:#636b5a;line-height:1.8}
+.status a,.status button{pointer-events:auto}.status a{text-decoration:underline;text-underline-offset:4px}.status p{margin:0}.status strong{font-weight:500}.camera-tools{margin-top:10px}.camera-tools button{padding:6px 12px;font-size:11px}.files{text-align:right}
+#message{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:85vw;text-align:center;font-size:13px;color:#636b5a;background:#f6f5f2ef;border-radius:12px;padding:16px 24px}
+@media(max-width:700px){header{padding:16px;gap:12px}.brand small{font-size:9px}.tools{gap:7px;max-width:260px}.tools nav{justify-content:flex-end}button{font-size:10px;padding:7px 10px}.status{left:16px;right:16px;bottom:16px;font-size:10px}.files{max-width:150px}.camera-tools button{font-size:10px}}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head>
+<body>
+<div id="viewport" aria-label="真实三维城市模型，可拖动旋转"></div>
+<img id="sample" alt="同一模型的 Cycles 实际渲染" hidden>
+<header><div class="brand">筑明AI<small>白模城市 · 建筑多样性 03</small></div><div class="tools">
+<nav aria-label="模型版本"><button data-version="02" aria-pressed="false">02 已认可基准</button><button data-version="03" aria-pressed="true">03 建筑多样性</button></nav>
+<nav aria-label="查看方式"><button data-view="model" aria-pressed="true">旋转模型</button><button data-view="detail" aria-pressed="false">Cycles 近景</button><button data-view="render" aria-pressed="false">Cycles 全景</button><button id="wire" aria-pressed="false" disabled>线框</button></nav>
+</div></header>
+<p id="message" role="status">正在加载真实模型…</p>
+<footer class="status"><div><strong id="mode">03 · 真实几何检查</strong><p id="hint">拖动旋转 · 滚轮缩放；切换版本保留视角</p>
+<nav class="camera-tools" aria-label="检查机位"><button data-camera="overview">全景机位</button><button data-camera="waterfront">河岸机位</button><button data-camera="plan">俯视机位</button><button data-camera="reset">复位</button></nav>
+</div><div class="files"><a id="blend" href="blender/city-03.blend" download>Blender 工程</a> · <a id="glb" href="blender/city-03.glb" download>GLB 模型</a><p>近景细化 · 中景轮廓 · 远景简模</p><p id="render-note">实时视图用于几何检查；Cycles 样张用于光照对比</p></div></footer>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+const host=document.querySelector('#viewport'),sample=document.querySelector('#sample'),message=document.querySelector('#message'),wire=document.querySelector('#wire');
+let selected='model',version='03',dirty=true,model=null;
+const cache=new Map(),pending=new Map(),scene=new THREE.Scene();scene.background=new THREE.Color('#f6f5f2');
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.setSize(innerWidth,innerHeight);renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=.95;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.shadowMap.autoUpdate=false;host.append(renderer.domElement);
+const pmrem=new THREE.PMREMGenerator(renderer),room=new RoomEnvironment();scene.environment=pmrem.fromScene(room,.04).texture;room.dispose();pmrem.dispose();scene.environmentIntensity=.3;
+scene.add(new THREE.HemisphereLight(0xffffff,0xb2b7a8,.45));
+const key=new THREE.DirectionalLight(0xfffaf2,2.1);key.position.set(-150,220,100);key.target.position.set(0,0,-60);key.castShadow=true;key.shadow.mapSize.set(4096,4096);Object.assign(key.shadow.camera,{left:-330,right:330,top:330,bottom:-330,near:1,far:900});key.shadow.normalBias=.18;key.shadow.bias=-.00015;scene.add(key,key.target);
+const camera=new THREE.PerspectiveCamera(36,innerWidth/innerHeight,.2,2200);camera.position.set(140,100,290);
+const controls=new OrbitControls(camera,renderer.domElement);controls.target.set(0,20,-45);controls.enableDamping=true;controls.dampingFactor=.09;controls.minDistance=35;controls.maxDistance=900;controls.maxPolarAngle=Math.PI*.495;controls.update();controls.addEventListener('change',()=>{dirty=true;});
+function setWire(value){wire.setAttribute('aria-pressed',String(value));if(model)model.traverse(obj=>{if(obj.isMesh)for(const mat of (Array.isArray(obj.material)?obj.material:[obj.material]))mat.wireframe=value;});dirty=true;}
+function loadModel(which){
+  if(cache.has(which))return Promise.resolve(cache.get(which));
+  if(pending.has(which))return pending.get(which);
+  const promise=new Promise((resolve,reject)=>new GLTFLoader().load(`blender/city-${which}.glb`,gltf=>{
+    const item=gltf.scene;let meshes=0;item.traverse(obj=>{if(obj.isMesh){meshes++;const materials=Array.isArray(obj.material)?obj.material:[obj.material];const water=materials.some(mat=>mat.name==='Pale river - physical reflection');obj.castShadow=!water;obj.receiveShadow=!water;}});item.userData.meshCount=meshes;cache.set(which,item);resolve(item);
+  },event=>{if(version===which&&selected==='model'&&event.total)message.textContent=`正在加载 ${which} 真实模型… ${Math.round(event.loaded/event.total*100)}%`;},reject));
+  pending.set(which,promise);promise.finally(()=>pending.delete(which)).catch(()=>{});return promise;
+}
+async function showModel(){
+  const request=version;wire.disabled=true;host.dataset.loaded='loading';message.textContent=`正在加载 ${request} 真实模型…`;message.hidden=selected!=='model';
+  try{const item=await loadModel(request);if(request!==version)return;if(model)scene.remove(model);model=item;scene.add(model);host.dataset.meshCount=String(item.userData.meshCount);host.dataset.version=request;host.dataset.loaded='true';setWire(wire.getAttribute('aria-pressed')==='true');wire.disabled=selected!=='model';message.hidden=true;renderer.shadowMap.needsUpdate=true;dirty=true;}
+  catch(error){if(request!==version)return;host.dataset.loaded='error';message.textContent='模型加载失败，请刷新页面重试。';message.hidden=selected!=='model';console.error(error);}
+}
+function updateView(){
+  const isModel=selected==='model';host.hidden=!isModel;sample.hidden=isModel;controls.enabled=isModel;document.querySelector('.camera-tools').hidden=!isModel;
+  wire.disabled=!isModel||!model||host.dataset.version!==version;
+  document.querySelectorAll('[data-version]').forEach(el=>el.setAttribute('aria-pressed',String(el.dataset.version===version)));
+  document.querySelectorAll('[data-view]').forEach(el=>el.setAttribute('aria-pressed',String(el.dataset.view===selected)));
+  document.querySelector('#blend').href=`blender/city-${version}.blend`;document.querySelector('#glb').href=`blender/city-${version}.glb`;
+  document.querySelector('#mode').textContent=`${version} · ${isModel?'真实几何检查':selected==='detail'?'Cycles 近景实际渲染':'Cycles 全景实际渲染'}`;
+  document.querySelector('#hint').textContent=isModel?'拖动旋转 · 滚轮缩放；切换版本保留视角':'同一机位与灯光 · 切换 02 / 03 比较细节';
+  message.hidden=!isModel||host.dataset.version===version;
+  if(isModel){if(host.dataset.version!==version)showModel();}
+  else{sample.src=selected==='detail'?`blender/renders/waterfront-detail-city-${version}.png`:`blender/renders/city-${version}.png`;sample.alt=`${version} ${selected==='detail'?'近景':'全景'} Cycles 实际渲染`;}
+  dirty=true;
+}
+sample.addEventListener('error',()=>{if(selected!=='model'){message.textContent='渲染样张加载失败，请刷新页面重试。';message.hidden=false;}});
+sample.addEventListener('load',()=>{if(selected!=='model')message.hidden=true;});
+document.querySelectorAll('[data-version]').forEach(button=>button.addEventListener('click',()=>{version=button.dataset.version;updateView();}));
+document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{selected=button.dataset.view;updateView();}));
+wire.addEventListener('click',()=>setWire(wire.getAttribute('aria-pressed')!=='true'));
+document.querySelectorAll('[data-camera]').forEach(button=>button.addEventListener('click',()=>{
+  controls.enableDamping=false;controls.update();const preset=button.dataset.camera;
+  if(preset==='waterfront'){camera.position.set(50,28,78);controls.target.set(20,8,-28);camera.fov=34;}
+  else if(preset==='plan'){camera.position.set(0,600,-60);controls.target.set(0,0,-60);camera.fov=42;}
+  else if(preset==='overview'){camera.position.set(55,104,340);controls.target.set(0,10,-50);camera.fov=36;}
+  else{camera.position.set(140,100,290);controls.target.set(0,20,-45);camera.fov=36;}
+  camera.updateProjectionMatrix();controls.update();controls.enableDamping=true;dirty=true;
+}));
+window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);dirty=true;});
+document.addEventListener('visibilitychange',()=>{dirty=true;});
+renderer.setAnimationLoop(()=>{if(document.hidden||selected!=='model')return;controls.update();if(dirty){renderer.render(scene,camera);dirty=false;}});
+updateView();
+</script>
+</body></html>

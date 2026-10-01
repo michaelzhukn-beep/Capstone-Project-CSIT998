@@ -30,6 +30,19 @@ assert all(p[k] is None for k in PARAM_KEYS if k != "semantic_query")
 
 # max_price=0 是第一版点名的最危险静默失败:它会返回空列表且不报错
 assert _sanitize({"max_price": 0}, "x")["max_price"] is None
+
+# 估值方向由原话决定,不信 LLM:实测「售价低于估值的两房」3/3 被 LLM 解析成"卖贵了"
+for query, llm_sort, expected in [
+    ("Richmond 附近,售价低于估值的两房", "predicted_gap_neg", "predicted_gap"),
+    ("找估值低于售价的房子", "predicted_gap", "predicted_gap_neg"),
+    ("被低估的两房", None, "predicted_gap"),
+    ("卖贵了的房子", None, "predicted_gap_neg"),
+    ("undervalued houses in Richmond", "predicted_gap_neg", "predicted_gap"),
+    ("回报最高且被低估的", "gross_yield", "gross_yield"),   # 用户要的是别的排序,不覆盖
+    ("高估值的房子", None, None),                            # 「估值高」不是方向词
+]:
+    got = _sanitize({"sort_by": llm_sort}, query)["sort_by"]
+    assert got == expected, f"«{query}» 期望 {expected},得到 {got}"
 assert _sanitize({"max_price": -5}, "x")["max_price"] is None
 assert _sanitize({"bedrooms": ""}, "x")["bedrooms"] is None
 assert _sanitize({"bedrooms": True}, "x")["bedrooms"] is None      # True 是 int 的子类
@@ -92,16 +105,27 @@ out = _run({"min_gross_yield": 0.06})
 assert {m["id"] for m in out["metrics"]} == {2, 5, 7}
 assert "已筛掉" in out["ranking"]
 
-# 门槛太高,一套都不剩 -> 不硬筛,给结果并说明。空列表会让用户分不清
-# 「没房源」和「门槛定太高」,那是两回事。
+# 门槛太高时明确没有兼容结果,不能自动删除条件。
 out = _run({"min_gross_yield": 0.99})
-assert len(out["metrics"]) == RESULT_LIMIT
-assert "没有一套达到" in out["ranking"]
+assert out["metrics"] == []
+assert "没有候选达到" in out["ranking"]
 
 # 排序字段全为 None -> 退回相关度顺序,并说明,而不是崩
 out = _run({"sort_by": "cap_rate"})
 assert len(out["metrics"]) == RESULT_LIMIT
 assert "已按相关度排序" in out["ranking"]
+
+# 审计 BUG-02:按回报率挑房时,售价远低于估值(超过典型误差 3 倍)的异常成交要先剔掉并说明,
+# 否则 $131,000 的 Caulfield 独栋会以 32% 回报率排第一
+ODD = [dict(_m(1, 0.32, 131_000), predicted_gap=1.19, valuation_error_pct=0.094),
+       dict(_m(2, 0.06, 500_000), predicted_gap=0.05, valuation_error_pct=0.094),
+       dict(_m(3, 0.05, 600_000), predicted_gap=-0.20, valuation_error_pct=0.094)]
+for params in ({"sort_by": "gross_yield"}, {"min_gross_yield": 0.04}):
+    out = rank({"metrics": list(ODD), "params": params})
+    assert 1 not in [m["id"] for m in out["metrics"]], params
+    assert "已剔除 1 套售价远低于模型估值" in out["ranking"]
+# 按价格排序不受影响:那是用户明说要看最便宜的
+assert rank({"metrics": list(ODD), "params": {"sort_by": "price_asc"}})["metrics"][0]["id"] == 1
 
 # ---------------------------------------------------------------- valuation
 
@@ -119,9 +143,37 @@ assert isinstance(v["predicted_price"], int) and v["predicted_price"] > 0
 assert v["range_low"] < v["predicted_price"] < v["range_high"]
 assert 0 < v["typical_error_pct"] < 0.5
 
+# 保形区间:必须是校准过的(meta 有 conformal 段),而且比"约半数落入"的典型误差区间宽
+assert v["interval_level"] == 0.8, "展示用的区间应为 80% 把握"
+assert v["interval_low"] < v["range_low"] < v["predicted_price"] < v["range_high"] < v["interval_high"]
+assert 0.75 <= v["interval_coverage"] <= 0.85, "实测覆盖率偏离标称太多,区间名不副实"
+for ptype, info in meta["conformal"]["levels"]["0.8"].items():
+    # 每一类房型都要在留出数据上验证过:平均覆盖率贴近标称,而不是只有整体达标
+    assert 0.77 <= info["coverage_mean"] <= 0.83, f"{ptype} 的 80% 区间实测覆盖 {info['coverage_mean']:.1%}"
+# 公寓误差比独栋大,区间必须更宽 —— 共用一个宽度会让公寓的区间名不副实
+apt = predict_value(dict(f, property_type="apartment"))
+assert (apt["interval_high"] / apt["predicted_price"]) > (v["interval_high"] / v["predicted_price"])
+
+# 分割保形分位数的定义:第 ceil((n+1)·level) 小的残差;样本不够时是无穷大(如实表示"不知道")
+from app.analytics.calibrate_valuation import conformal_q
+import math as _math
+assert conformal_q([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], 0.8) == 8.0
+assert conformal_q([1.0, 2.0, 3.0], 0.9) == _math.inf
+
 # 批量与逐条必须逐字一致,否则就是偷偷换了算法
 assert predict_values([f, f]) == [v, v]
 assert predict_values([]) == []
+
+# 审计 BUG-03:库内房源用离折估值(没见过它的那一折模型)。Caulfield 这栋 4 房 155 ㎡ 独栋登记成交价
+# $131,000,定稿模型见过它、估 $286,690 并把售价包进区间;离折估值必须回到同区独栋的百万级
+PYNE = {"suburb": "Caulfield", "address": "30 Pyne St", "property_type": "house", "bedrooms": 4,
+        "bathrooms": 1, "car_spaces": 2, "land_size": 499.0, "building_area": 155.0,
+        "distance_cbd": 8.9, "latitude": -37.8864, "longitude": 145.0242, "price": 131000}
+pyne = predict_values([PYNE])[0]
+assert pyne["cross_fitted"] and pyne["predicted_price"] > 1_000_000, pyne
+assert PYNE["price"] < pyne["interval_low"], "异常低价必须落在区间之外"
+# 查不到(库外输入 / 不带售价)就用定稿模型,并如实标出来
+assert predict_values([{k: val for k, val in PYNE.items() if k != "price"}])[0]["cross_fitted"] is False
 
 # 缺失特征不许崩(线上 land_size / building_area 有近一半是空的)
 sparse = dict(f, land_size=None, building_area=None)
@@ -220,13 +272,12 @@ enriched = enrich({"metrics": [dict(CITY), dict(FAR)],
 out = rank({"metrics": enriched,
             "params": {"amenity_needs": [{"kind": "train_station", "max_distance_m": 1000}]}})
 assert [m["id"] for m in out["metrics"]] == [1]
-assert "已筛出距火车站 1000 米内的" in out["ranking"]
+assert "要求距火车站 1000 米内" in out["ranking"]
 
-# 门槛严到一套不剩时:不硬筛,如实说明,并告诉用户最近的有多远
+# 门槛严到一套不剩时:不返回违反条件的房源。
 out = rank({"metrics": enriched,
             "params": {"amenity_needs": [{"kind": "train_station", "max_distance_m": 1}]}})
-assert len(out["metrics"]) == 2, "一套不剩时应保留结果并说明,而不是返回空列表"
-assert "已忽略该条件" in out["ranking"] and "最近的也有" in out["ranking"]
+assert out["metrics"] == [] and "同时满足" in out["ranking"]
 
 
 # ---------------------------------------------------------------- V4:抽象需求
@@ -237,19 +288,29 @@ assert p["abstract_needs"] == [{"attribute": "quiet", "min_score": 75}]
 # 不在四类之内的属性丢掉,不猜
 assert _sanitize({"abstract_needs": [{"attribute": "sunny", "min_score": 60}]}, "x")["abstract_needs"] is None
 # 提了属性但没给门槛/给了非法门槛 -> 用默认 60,而不是 0(0 等于没筛)
-for bad in ({"attribute": "quiet"}, {"attribute": "quiet", "min_score": 0},
+for bad in ({"attribute": "quiet"}, {"attribute": "quiet", "min_score": -1},
             {"attribute": "quiet", "min_score": 500}, {"attribute": "quiet", "min_score": True}):
     assert _sanitize({"abstract_needs": [bad]}, "x")["abstract_needs"] ==         [{"attribute": "quiet", "min_score": 60}], bad
 
-# 安静与热闹互斥(实测相关系数 -0.80),同时要就保留先出现的那个并记下冲突
+for boundary in (0, 100):
+    need = {"attribute": "quiet", "min_score": boundary, "operator": "eq"}
+    assert _sanitize({"abstract_needs": [need]}, "x")["abstract_needs"] == [need]
+for invalid in ("eval", {}, None):
+    need = {"attribute": "quiet", "min_score": 40, "operator": invalid}
+    assert _sanitize({"abstract_needs": [need]}, "x")["abstract_needs"][0]["operator"] == "gte"
+explicit = [{"attribute": "quiet", "min_score": 60, "operator": "lt"},
+            {"attribute": "lively", "min_score": 60, "operator": "gte"}]
+assert _sanitize({"abstract_needs": explicit}, "x")["abstract_needs"] == explicit
+
+# 负相关不是逻辑互斥,无论顺序如何均保留两项。
 p = _sanitize({"abstract_needs": [{"attribute": "quiet", "min_score": 60},
                                   {"attribute": "lively", "min_score": 60}]}, "x")
-assert [w["attribute"] for w in p["abstract_needs"]] == ["quiet"]
-assert p["_conflict"] == "lively"
+assert [w["attribute"] for w in p["abstract_needs"]] == ["quiet", "lively"]
+assert "_conflict" not in p
 p = _sanitize({"abstract_needs": [{"attribute": "lively", "min_score": 60},
                                   {"attribute": "quiet", "min_score": 60}]}, "x")
-assert [w["attribute"] for w in p["abstract_needs"]] == ["lively"]
-assert p["_conflict"] == "quiet"
+assert [w["attribute"] for w in p["abstract_needs"]] == ["lively", "quiet"]
+assert "_conflict" not in p
 # 不冲突的组合要留全
 p = _sanitize({"abstract_needs": [{"attribute": "lively", "min_score": 60},
                                   {"attribute": "convenient", "min_score": 60}]}, "x")
@@ -274,13 +335,30 @@ assert "已筛出「安静」评分 ≥ 60 的" in out["ranking"]
 out = rank({"metrics": list(Q), "params": {"sort_by": "quiet"}})
 assert [m["id"] for m in out["metrics"]] == [1, 3, 5, 2], "应按安静分降序,没分的排除"
 
-# 门槛太高时不硬筛,并告诉用户候选里最高是多少
+# 门槛太高时明确没有兼容结果。
 out = rank({"metrics": list(Q), "params": {"abstract_needs": [{"attribute": "quiet", "min_score": 99}]}})
-assert len(out["metrics"]) == RESULT_LIMIT
-assert "候选里最高只有 90" in out["ranking"]
+assert out["metrics"] == [] and "同时满足" in out["ranking"]
 
-# 冲突要如实写进排序口径说明里
+# 明确比较符号必须影响结果,尤其 > / ≥、< / ≤ 在边界处不能混淆。
+for op, ids, symbol in (("gte", {1, 3}, "≥"), ("gt", {1}, ">"),
+                        ("lte", {2, 3, 5}, "≤"), ("lt", {2, 5}, "<"), ("eq", {3}, "=")):
+    need = {"attribute": "quiet", "min_score": 70, "operator": op}
+    for lang in ("zh", "en"):
+        out = rank({"metrics": list(Q), "params": {"abstract_needs": [need]}, "lang": lang})
+        assert {m["id"] for m in out["metrics"]} == ids, (op, out["metrics"])
+        assert symbol + " 70" in out["ranking"]
+for op in ("lt", "eq"):
+    out = rank({"metrics": list(Q), "params": {"abstract_needs": [
+        {"attribute": "quiet", "min_score": 0, "operator": op}]}})
+    assert out["metrics"] == [] and "已忽略" not in out["ranking"]
+edges = [{"id": 10, "context_scores": {"quiet": 0}}, {"id": 11, "context_scores": {"quiet": 100}}]
+for value, expected in ((0, 10), (100, 11)):
+    out = rank({"metrics": edges, "params": {"abstract_needs": [
+        {"attribute": "quiet", "min_score": value, "operator": "eq"}]}})
+    assert [m["id"] for m in out["metrics"]] == [expected]
+
+# 旧会话的互斥标记不再引发条件删除。
 out = rank({"metrics": list(Q), "params": {"_conflict": "lively"}})
-assert "互斥" in out["ranking"] and "已忽略「热闹」" in out["ranking"]
+assert "互斥" not in out["ranking"] and "已忽略" not in out["ranking"]
 
 print("编排层 + 估值 + 假设 + 设施 + 抽象需求 全部通过。")

@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>白模城市原型 · 筑明AI</title>
+<!--
+  实验原型(experimental),不是线上首页。
+  v2:模块化白模。14 种精细白模模块(每层楼板、竖向窗格、玻璃芯、女儿墙、屋顶机房、
+  坡屋顶、阳台……)在街区网格上随机摆放、随机转向;城市由西向东平移,每移过一个
+  地块宽度,整列内容顺移一格并在最西侧补一列新的随机地块 —— 模块会重复,摆法不会。
+  观感:环境光遮蔽(GTAO)+ 软阴影 + 远处雾化 + 极淡暖色窗光泛光;顶部水纹为程序化焦散。
+  直接双击打开即可(需要联网加载 Three.js 与字体)。
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Serif+SC:wght@500;600&display=swap">
+<style>
+  :root {
+    --bg: #F7F7F5; --ink: #151614; --sub: #5E5D58; --mute: #8B8983; --line: rgba(60, 58, 52, .16);
+    --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun", serif;
+    --sans: -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    -webkit-font-smoothing: antialiased; overflow: hidden; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+
+  #city { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  /* 底边淡出:和效果图一样让城市脚下化进白色,底部文字也更好读 */
+  .veil { position: fixed; inset: auto 0 0; height: 16vh; pointer-events: none;
+    background: linear-gradient(180deg, rgba(247,247,245,0), rgba(247,247,245,.45) 70%, rgba(247,247,245,.7)); }
+  .ui { position: fixed; inset: 0; pointer-events: none; }
+  .ui > * { pointer-events: auto; }
+
+  .brand { position: absolute; left: clamp(28px, 4.4vw, 76px); top: clamp(40px, 8vh, 84px); }
+  .brand b { display: block; font-size: clamp(22px, 1.9vw, 32px); font-weight: 700; letter-spacing: .01em; }
+  .brand span { display: block; margin-top: 8px; font-size: 12.5px; letter-spacing: .08em; line-height: 1.7; color: var(--sub); }
+  .brand i { display: block; width: 82px; height: 1.5px; margin-top: clamp(28px, 6vh, 56px); background: var(--ink); }
+  .spine { position: absolute; left: clamp(20px, 2.9vw, 48px); top: 7vh; bottom: 30vh; width: 1px; background: var(--line); }
+
+  .top { position: absolute; right: clamp(24px, 4vw, 70px); top: 34px; display: flex; align-items: center; gap: clamp(20px, 2.6vw, 46px); font-size: 15px; }
+  .top .lang { padding: 5px 14px; border-radius: 999px; background: rgba(255,255,255,.75); font-weight: 600; font-size: 14px; }
+
+  .rail { position: absolute; left: clamp(28px, 4.4vw, 76px); top: 31vh; width: clamp(140px, 11vw, 190px); list-style: none; margin: 0; padding: 0; }
+  .rail li { position: relative; padding: 14px 0 18px; border-bottom: 1px solid var(--line); font-size: 13px; letter-spacing: .06em; color: var(--mute); }
+  .rail li b { display: block; font-size: 14px; color: var(--ink); margin-bottom: 6px; font-weight: 600; }
+  .rail li::after { content: ""; position: absolute; right: -2px; bottom: -3px; width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
+  .rail li.on::before { content: ""; position: absolute; left: calc(-1 * clamp(28px, 4.4vw, 76px) + clamp(20px, 2.9vw, 48px) - 4px);
+    top: 10px; width: 9px; height: 46px; border-radius: 3px; background: linear-gradient(90deg, #fff, #dcdad4);
+    box-shadow: 0 0 0 1px rgba(160,156,146,.6), 0 2px 6px rgba(0,0,0,.08); }
+
+  .copy { position: absolute; left: clamp(250px, 22.5vw, 400px); top: 24vh; }
+  .copy h1 { margin: 0; font-family: var(--serif); font-weight: 600; font-size: clamp(44px, 4.7vw, 84px); line-height: 1.22; letter-spacing: .01em; }
+  .copy p { margin: clamp(18px, 3vh, 32px) 0 0; font-size: clamp(16px, 1.5vw, 25px); line-height: 1.7; color: var(--sub); letter-spacing: .02em; }
+
+  .composer { position: absolute; left: clamp(200px, 19.5vw, 350px); top: 57.5vh; width: min(1020px, 61vw); height: 76px;
+    display: flex; align-items: center; gap: 18px; padding: 0 9px 0 28px; border-radius: 999px; background: #fff;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 18px 50px -18px rgba(40,38,30,.22); }
+  .composer svg.s { flex: 0 0 auto; color: #56554F; }
+  .composer input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; font: inherit; font-size: 17px; color: var(--ink); }
+  .composer input::placeholder { color: #8D8B85; }
+  .composer .go { flex: 0 0 auto; width: 60px; height: 60px; border-radius: 50%; display: grid; place-items: center; background: #1F201E; }
+
+  .aside { position: absolute; right: clamp(24px, 4vw, 70px); top: 22vh; padding-left: 18px; border-left: 1px solid var(--line);
+    font-size: 14px; line-height: 1.9; letter-spacing: .08em; color: var(--sub); }
+  .foot-l { position: absolute; left: clamp(28px, 4.4vw, 76px); bottom: 5vh; font-size: 13.5px; line-height: 1.9; letter-spacing: .08em; color: var(--sub); }
+  .foot-c { position: absolute; left: 50%; bottom: 4.4vh; transform: translateX(-50%); font-size: 15px; letter-spacing: 1.1em; text-indent: 1.1em; color: var(--sub); white-space: nowrap; }
+  .foot-r { position: absolute; right: clamp(24px, 3.2vw, 56px); bottom: 4.4vh; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; font-size: 16px; letter-spacing: .04em; color: var(--sub); }
+  .foot-r span { display: flex; align-items: center; gap: 12px; }
+  .foot-r i { width: 12px; height: 12px; border: 1.5px solid currentColor; }
+  .foot-r i.f { background: currentColor; box-shadow: inset 0 0 0 2px #fff; }
+
+  /* 原型调试面板:不是设计的一部分 */
+  .hud { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); display: flex; gap: 8px; align-items: center;
+    padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.8); border: 1px solid var(--line);
+    font: 11px/1.4 var(--mono); color: var(--sub); z-index: 5; white-space: nowrap; }
+  .hud button { padding: 2px 8px; border: 1px solid var(--line); border-radius: 5px; background: #fff; font: inherit; }
+  .hud input { width: 80px; }
+  .fallback { position: fixed; inset: auto 0 0; height: 40vh; display: none; place-items: center; color: var(--mute); font-size: 13px; }
+</style>
+</head>
+<body>
+<canvas id="city" aria-hidden="true"></canvas>
+<div class="veil" aria-hidden="true"></div>
+<div class="fallback" id="fallback">此浏览器不支持 WebGL,城市层不显示(页面其余部分照常可用)</div>
+
+<div class="ui">
+  <div class="spine" aria-hidden="true"></div>
+  <div class="brand"><b>筑明AI</b><span>SYNTHESIZE INFORMATION<br>FOR A BETTER HOME</span><i></i></div>
+  <nav class="top" aria-label="顶栏"><button class="lang" type="button">EN</button><button type="button">假设</button><button type="button">新对话</button></nav>
+  <ol class="rail" aria-hidden="true">
+    <li class="on"><b>01</b>SPACE</li><li><b>02</b>LIVING</li><li><b>03</b>COMMUNITY</li><li><b>04</b>ANALYSIS</li>
+  </ol>
+  <div class="copy">
+    <h1>更好的家,<br>从一个问题开始。</h1>
+    <p>输入预算、区域或偏好。<br>所有评估数据均基于实测、假设校验与模型测算。</p>
+  </div>
+  <form class="composer" onsubmit="return false">
+    <svg class="s" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.8-4.8"/></svg>
+    <input type="text" placeholder="输入预算、区域或偏好,例如「100万内 · 近车站 · 3房」" aria-label="找房需求">
+    <button class="go" type="submit" aria-label="发送"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg></button>
+  </form>
+  <div class="aside" aria-hidden="true">A<br>BETTER<br>LIVING</div>
+  <div class="foot-l" aria-hidden="true">AI<br>FOR A BETTER HOME</div>
+  <div class="foot-c" aria-hidden="true">家 · 生活 · 可能性</div>
+  <div class="foot-r" aria-hidden="true"><span>NESTWISE <i></i></span><span>MELBOURNE <i class="f"></i></span></div>
+</div>
+
+<div class="hud" id="hud">
+  <span>原型 v2</span>
+  <button id="h-play" type="button">暂停</button>
+  <label>速度 <input id="h-speed" type="range" min="0" max="5" step="0.1" value="1"></label>
+  <button id="h-ao" type="button">AO:开</button>
+  <button id="h-bloom" type="button">泛光:开</button>
+  <button id="h-water" type="button">水纹:开</button>
+  <span id="h-fps">— fps</span>
+  <span id="h-tri"></span>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+
+// ================================================================== 渲染器
+const canvas = document.getElementById('city');
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+} catch (e) {
+  document.getElementById('fallback').style.display = 'grid';
+  throw e;
+}
+const BG = new THREE.Color('#F7F7F5');
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// 中性色调映射:白色保持干净,不会像 ACES 那样发灰发黄
+renderer.toneMapping = THREE.NeutralToneMapping;
+renderer.toneMappingExposure = 1.0;
+
+// 诊断开关:?cam=aerial 高位斜俯视 · ?light=key 强主光+实阴影 · ?mass=1 只用体块(去掉窗格等细节)
+const qs = new URLSearchParams(location.search);
+const AERIAL = qs.get('cam') === 'aerial', KEY = qs.get('light') === 'key', MASS = qs.get('mass') === '1';
+const scene = new THREE.Scene();
+scene.background = BG;
+scene.fog = new THREE.Fog(BG, 560, 1700);
+if (AERIAL) { scene.fog.near = 1100; scene.fog.far = 2800; }
+
+// 单位:米。相机高 70 m、微微上仰,地平线在画面约 66% 处,近处地面约 390 m 外
+const camera = new THREE.PerspectiveCamera(30, 1, 5, 3000);
+camera.position.set(0, 70, 160);
+camera.lookAt(0, 95.2, -140);
+if (AERIAL) { camera.position.set(0, 560, 420); camera.lookAt(0, 0, -300); }
+
+const hemi = new THREE.HemisphereLight(0xffffff, 0xecebe7, 2.0);
+scene.add(hemi);
+// 高角度、近乎中性的白光:影子短而淡,不把画面染黄
+const sun = new THREE.DirectionalLight(0xfffaf4, 1.9);
+sun.position.set(-320, 900, 280);
+sun.target.position.set(0, 0, -420);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+Object.assign(sun.shadow.camera, { left: -620, right: 620, top: 520, bottom: -520, near: 50, far: 2200 });
+sun.shadow.bias = -0.0002;
+sun.shadow.normalBias = 0.6;
+sun.shadow.intensity = .7;
+if (KEY) { hemi.intensity = .75; sun.intensity = 3.6; sun.position.set(-760, 480, -320); sun.shadow.intensity = 1; }
+scene.add(sun, sun.target);
+
+// ================================================================== 白模构件库
+const COL = {
+  white: [1, 1, 1], frame: [.955, .95, .94], glass: [.9, .91, .912], roof: [.935, .93, .915], path: [.985, .982, .975],
+};
+
+/** 统一成:非索引、无 uv、带顶点色 —— 这样任意构件都能合并成一个几何体。 */
+function prep(geo, x, y, z, rgb) {
+  const g = geo.index ? geo.toNonIndexed() : geo;
+  g.deleteAttribute('uv');
+  if (!g.attributes.normal) g.computeVertexNormals();
+  g.translate(x, y, z);
+  const n = g.attributes.position.count, c = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { c[i * 3] = rgb[0]; c[i * 3 + 1] = rgb[1]; c[i * 3 + 2] = rgb[2]; }
+  g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+  return g;
+}
+
+function rng(seed) {
+  return () => {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+/** 一个模块的"施工队":hi = 近景精细几何,lo = 远景简化几何,glow = 暖色窗光,trees = 树位。 */
+class Kit {
+  constructor(seed) { this.r = rng(seed); this.hi = []; this.lo = []; this.glow = []; this.trees = []; }
+  box(x, y, z, w, h, d, c = COL.white, lod = true) {
+    this.hi.push(prep(new THREE.BoxGeometry(w, h, d), x, y + h / 2, z, c));
+    if (lod) this.lo.push(prep(new THREE.BoxGeometry(w, h, d), x, y + h / 2, z, c));
+  }
+  detail(x, y, z, w, h, d, c = COL.white) { this.box(x, y, z, w, h, d, c, false); }
+  glowBox(x, y, z, w, h, d) { this.glow.push(prep(new THREE.BoxGeometry(w, h, d), x, y + h / 2, z, COL.white)); }
+  cyl(x, y, z, r, h, seg, c = COL.white, lod = true) {
+    this.hi.push(prep(new THREE.CylinderGeometry(r, r, h, seg, 1), x, y + h / 2, z, c));
+    if (lod) this.lo.push(prep(new THREE.CylinderGeometry(r, r, h, 10, 1), x, y + h / 2, z, c));
+  }
+  /** 双坡屋顶,屋脊默认沿 x。 */
+  gable(x, y, z, w, h, d, alongZ = false, c = COL.roof) {
+    const hw = w / 2, hd = d / 2;
+    const A = [-hw, 0, -hd], B = [hw, 0, -hd], C = [hw, 0, hd], D = [-hw, 0, hd], E = [-hw, h, 0], F = [hw, h, 0];
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute([A, F, B, A, E, F, D, C, F, D, F, E, A, D, E, B, F, C].flat(), 3));
+    g.computeVertexNormals();
+    if (alongZ) g.rotateY(Math.PI / 2);
+    const p = prep(g, x, y, z, c);
+    this.hi.push(p); this.lo.push(p.clone());
+  }
+  tree(x, z, s = 1) { this.trees.push([x, z, s]); }
+  treeRow(x0, z0, x1, z1, n, s = 1) {
+    for (let i = 0; i < n; i++) { const f = n === 1 ? .5 : i / (n - 1); this.tree(x0 + (x1 - x0) * f, z0 + (z1 - z0) * f, s * (.85 + this.r() * .3)); }
+  }
+  /** 现代板楼:玻璃芯 + 每层楼板 + 四面竖向窗格 + 顶板女儿墙 + 屋顶机房,可选阳台与首层窗光。 */
+  slab(x, z, w, d, floors, o = {}) {
+    const FH = 3.3, y0 = o.y0 || 0, H = floors * FH, ins = o.inset ?? .8, bay = o.bay || 3.3;
+    this.detail(x, y0, z, w - ins * 2, H, d - ins * 2, COL.glass);
+    for (let f = 0; f < floors; f++) this.detail(x, y0 + f * FH, z, w, .38, d);
+    this.detail(x, y0 + H, z, w + .2, 1.1, d + .2);
+    const fins = (len, fn) => { const n = Math.max(2, Math.round(len / bay)); for (let i = 0; i <= n; i++) fn(-len / 2 + i * len / n); };
+    fins(w, fx => { this.detail(x + fx, y0, z + d / 2 - .25, .36, H, .5); this.detail(x + fx, y0, z - d / 2 + .25, .36, H, .5); });
+    fins(d, fz => { this.detail(x + w / 2 - .25, y0, z + fz, .5, H, .36); this.detail(x - w / 2 + .25, y0, z + fz, .5, H, .36); });
+    if (o.balcony) {
+      for (let f = 1; f < floors; f += 2) {
+        this.detail(x, y0 + f * FH, z + d / 2 + .7, w * .9, .32, 1.4);
+        this.detail(x, y0 + f * FH + .32, z + d / 2 + 1.36, w * .9, 1.05, .1, COL.frame);
+      }
+    }
+    if (o.lit) this.glowBox(x, y0 + .5, z, w - ins * 2 + .14, FH - .9, d - ins * 2 + .14);
+    if (o.roof !== false && floors > 2) {
+      this.detail(x + (this.r() - .5) * w * .3, y0 + H + 1.1, z + (this.r() - .5) * d * .3, w * (.22 + this.r() * .14), 2.6, d * (.22 + this.r() * .14), COL.roof);
+      if (w > 12) this.detail(x - w * .28, y0 + H + 1.1, z + d * .2, 2.2, 1.6, 2.2, COL.roof);
+    }
+    this.lo.push(prep(new THREE.BoxGeometry(w, H + 1.1, d), x, y0 + (H + 1.1) / 2, z, COL.white));
+  }
+  build() {
+    const m = a => a.length ? mergeGeometries(a) : null;
+    return { hi: m(this.hi), lo: m(this.lo), glow: m(this.glow), trees: this.trees };
+  }
+}
+
+// ================================================================== 14 种模块(地块 30 × 30 m,中心为原点)
+const MODULES = [
+  { key: 'slab7', tall: false, w: 3, build(k) {
+    k.slab(0, -4, 25, 13, 7, { lit: true }); k.treeRow(-10, 9, 10, 9, 4, 1.05);
+  } },
+  { key: 'slab5-balcony', tall: false, w: 3, build(k) {
+    k.slab(0, -2, 23, 12, 5, { balcony: true }); k.tree(-11, 10, .9); k.tree(11, 10, 1); k.tree(0, -12, .8);
+  } },
+  { key: 'tower-podium', tall: true, w: 2, build(k) {
+    k.slab(0, 0, 26, 24, 2, { lit: true, bay: 4.4, roof: false });
+    k.slab(1, -1, 14, 14, 21, { y0: 6.6 + 1.1 });
+    k.box(1, 6.6 + 1.1 + 69.3 + 1.1, -1, 8, 4, 8, COL.roof);
+    k.box(1, 6.6 + 1.1 + 69.3 + 5.1, -1, 1.2, 9, 1.2, COL.white);
+  } },
+  { key: 'twin-towers', tall: true, w: 1.5, build(k) {
+    k.slab(0, 0, 27, 18, 2, { lit: true, bay: 4.5, roof: false });
+    k.slab(-7, 0, 9.5, 10, 16, { y0: 7.7 });
+    k.slab(7, 0, 9.5, 10, 11, { y0: 7.7 });
+    k.box(0, 7.7, 0, 4.5, 3.3, 3, COL.glass);
+  } },
+  { key: 'round-tower', tall: true, w: 1.2, build(k) {
+    k.slab(0, 0, 25, 25, 2, { lit: true, bay: 5, roof: false });
+    const y0 = 7.7, fl = 18;
+    k.cyl(0, y0, 0, 6.4, fl * 3.3, 28, COL.glass, false);
+    for (let f = 0; f <= fl; f++) k.cyl(0, y0 + f * 3.3, 0, 7.3, .4, 32, COL.white, false);
+    for (let i = 0; i < 16; i++) { const a = i / 16 * Math.PI * 2; k.detail(Math.cos(a) * 7, y0, Math.sin(a) * 7, .45, fl * 3.3, .45); }
+    k.cyl(0, y0, 0, 7.3, fl * 3.3 + .4, 12, COL.white, true);
+    k.cyl(0, y0 + fl * 3.3 + .4, 0, 4, 3.2, 20, COL.roof);
+  } },
+  { key: 'terrace', tall: false, w: 2.5, build(k) {
+    k.slab(0, -3, 25, 17, 3, { lit: true, roof: false });
+    k.slab(0, -5.5, 20, 12, 3, { y0: 9.9 + 1.1, balcony: true, roof: false });
+    k.slab(0, -7.5, 13, 7, 2, { y0: 19.8 + 2.2 });
+    k.treeRow(-9, 10.5, 9, 10.5, 4, .95);
+  } },
+  { key: 'courtyard', tall: false, w: 2.5, build(k) {
+    k.slab(0, -10.5, 27, 7, 5);
+    k.slab(-10.5, 3, 6, 20, 5, { bay: 3.6 });
+    k.slab(10.5, 3, 6, 20, 4, { bay: 3.6, lit: true });
+    k.box(0, 0, 3, 13, .2, 16, COL.path);
+    k.tree(-3, 0, 1.1); k.tree(3, 5, 1); k.tree(-2, 9, .9); k.tree(3.5, -3, .85);
+  } },
+  { key: 'townhouses', tall: false, w: 2.5, build(k) {
+    for (let i = 0; i < 4; i++) {
+      const x = -9.6 + i * 6.4, h = 6.2 + (i % 2) * .6;
+      k.box(x, 0, -2, 5.8, h, 11);
+      k.gable(x, h, -2, 6.3, 2.8, 11.6, true);
+      k.detail(x - 1, 1, 3.55, 2.6, 3.2, .12, COL.glass);
+      k.detail(x + 1.6, 3.6, 3.55, 1.4, 1.6, .12, COL.glass);
+      if (i === 1) k.glowBox(x - 1, 1.05, 3.48, 2.5, 3.1, .1);
+      k.detail(x, 0, 5.2, 5.8, .9, 3.2, COL.frame);
+    }
+    k.treeRow(-11, 11, 11, 11, 5, .85);
+  } },
+  { key: 'villas', tall: false, w: 2, build(k) {
+    [[-7.5, -6], [7.5, -4.5], [-1, 8]].forEach(([x, z], i) => {
+      k.box(x, 0, z, 9, 6.4, 8);
+      k.gable(x, 6.4, z, 9.6, 3.2, 8.6, i === 1);
+      k.box(x + 5.2, 0, z + 1.5, 4.2, 3.4, 4.6);
+      k.detail(x + 5.2, 3.4, z + 1.5, 4.6, .3, 5, COL.white);
+      k.detail(x - 1.5, 1, z + 4.05, 4, 3, .12, COL.glass);
+      if (i === 0) k.glowBox(x - 1.5, 1.05, z + 4, 3.9, 2.9, .1);
+    });
+    k.tree(10, 9, 1.1); k.tree(-11, 5, .9); k.tree(3, -12, 1); k.tree(-12, -12, .8); k.tree(12, -12, .95);
+  } },
+  { key: 'mall', tall: false, w: 1.5, build(k) {
+    k.box(0, 0, -1, 27, 9, 22);
+    k.detail(0, .6, -1, 27.3, 3.2, 22.3, COL.glass);
+    k.glowBox(0, .7, -1, 27.1, 3, 22.1);
+    k.detail(0, 3.8, -1, 27.6, .5, 22.6);
+    for (let i = 0; i < 4; i++) k.gable(-10.1 + i * 6.75, 9, -1, 6.75, 2.6, 21.2, true);
+    k.treeRow(-12, 12, 12, 12, 6, .8);
+  } },
+  { key: 'l-shape', tall: false, w: 2.5, build(k) {
+    k.slab(-4, -7, 21, 10, 6, { lit: true });
+    k.slab(8.5, 4.5, 10, 15, 6, { balcony: true });
+    k.tree(-8, 6, 1.1); k.tree(-2, 10, .9); k.tree(-11, 11, .8);
+  } },
+  { key: 'slim-tower', tall: true, w: 1.5, build(k) {
+    k.slab(0, 0, 19, 19, 1, { lit: true, bay: 3.8, roof: false });
+    k.slab(0, 0, 11, 11, 27, { y0: 3.3 + 1.1, balcony: true });
+    k.tree(-11, 11, 1); k.tree(11, 11, .9);
+  } },
+  { key: 'park', tall: false, w: 1.3, build(k) {
+    k.box(0, 0, 0, 29, .15, 3, COL.path); k.box(0, 0, 0, 3, .15, 29, COL.path);
+    k.box(7.5, 0, 7.5, 7, 3.2, 7, COL.glass); k.detail(7.5, 3.2, 7.5, 9, .45, 9);
+    [[-8, -8], [-11, -3], [-4, -11], [-9, 9], [-4, 5], [-12, 12], [8, -9], [12, -4], [4, -5], [11, -12], [2, 12], [12, 3]].forEach(([x, z]) => k.tree(x, z, 1 + k.r() * .45));
+  } },
+  { key: 'setback-office', tall: true, w: 1.2, build(k) {
+    k.slab(0, 0, 25, 21, 6, { lit: true, bay: 4, roof: false });
+    k.slab(0, -1, 19, 15, 8, { y0: 19.8 + 1.1, bay: 3.8, roof: false });
+    k.slab(0, -2, 12, 10, 8, { y0: 19.8 + 26.4 + 2.2 });
+    k.tree(-11, 12, 1); k.tree(11, 12, 1);
+  } },
+];
+
+function treeGeometry(detail) {
+  return mergeGeometries([
+    prep(new THREE.CylinderGeometry(.22, .32, 2.6, 6, 1), 0, 1.3, 0, COL.frame),
+    prep(new THREE.IcosahedronGeometry(2.3, detail), 0, 4.4, 0, COL.white),
+    prep(new THREE.IcosahedronGeometry(1.75, detail), 1.35, 3.6, .7, COL.white),
+    prep(new THREE.IcosahedronGeometry(1.6, detail), -1.25, 3.9, -.7, COL.white),
+    prep(new THREE.IcosahedronGeometry(1.35, detail), .25, 5.8, -.3, COL.white),
+  ]);
+}
+
+// ================================================================== 城市网格(传送带)
+const PITCH = 38;            // 地块 30 m + 路 8 m
+const COLS = 44, ROWS = 32;
+const Z_NEAR = AERIAL ? 40 : -190;         // 最近一排地块中心(再近就在画面下沿以外)
+const LOD_DIST = MASS ? -1 : AERIAL ? 1300 : 620;        // 超过此距离用简化几何:3.3 m 的窗格在这之外小于一个像素,只剩噪点
+const city = new THREE.Group();
+scene.add(city);
+
+const matBody = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .92, metalness: 0 });
+const matGlow = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.4, 1.7, 1.0) });
+
+const CAP = COLS * ROWS;
+const instanced = (geo, mat, cap, shadow = true) => {
+  const m = new THREE.InstancedMesh(geo, mat, cap);
+  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  m.count = 0; m.frustumCulled = false;
+  m.castShadow = shadow; m.receiveShadow = true;
+  city.add(m);
+  return m;
+};
+const kinds = MODULES.map((def, i) => {
+  const k = new Kit(1000 + i * 97);
+  def.build(k);
+  const g = k.build();
+  return { def, trees: g.trees, hi: instanced(g.hi, matBody, CAP), lo: instanced(g.lo, matBody, CAP),
+    glow: g.glow ? instanced(g.glow, matGlow, CAP, false) : null };
+});
+const treesNear = instanced(treeGeometry(1), matBody, 16000);
+const treesFar = instanced(treeGeometry(0), matBody, 16000, false);
+const plinths = instanced(prep(new THREE.BoxGeometry(31, .3, 31), 0, .15, 0, COL.path), matBody, CAP, false);
+
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(6000, 4000), new THREE.MeshStandardMaterial({ color: '#E9E7E2', roughness: 1 }));
+ground.rotation.x = -Math.PI / 2;
+ground.position.z = -1400;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const totalWeight = t => MODULES.reduce((s, m) => s + (m.tall === t || t === undefined ? m.w : 0), 0);
+function pickModule(row) {
+  const depth = row / ROWS;
+  // 塔楼集中在中远景,近处以低层为主 —— 效果图就是这样的层次
+  // 近景不出塔楼:近处的塔会一路冲到输入栏和标题上
+  const tallBias = depth < .22 ? 0 : depth < .62 ? .15 : .03;
+  const tall = Math.random() < tallBias;
+  let u = Math.random() * totalWeight(tall);
+  for (let i = 0; i < MODULES.length; i++) {
+    if (MODULES[i].tall !== tall) continue;
+    if ((u -= MODULES[i].w) <= 0) return i;
+  }
+  return 0;
+}
+function newLot(row) {
+  const street = [];
+  if (Math.random() < .7) for (let i = 0; i < 3; i++) street.push([-15 + i * 15 + (Math.random() - .5) * 4, 17.5, .75 + Math.random() * .3]);
+  return { kind: pickModule(row), rot: Math.floor(Math.random() * 4), street };
+}
+const grid = Array.from({ length: COLS }, () => Array.from({ length: ROWS }, (_, r) => newLot(r)));
+
+const M = new THREE.Matrix4(), M2 = new THREE.Matrix4(), Q = new THREE.Quaternion(), Q2 = new THREE.Quaternion();
+const V = new THREE.Vector3(), V2 = new THREE.Vector3(), S = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0), ONE = new THREE.Vector3(1, 1, 1);
+
+/** 按网格数据重写全部实例矩阵。只在城市平移满一个地块宽度时调用(约每十几秒一次)。 */
+function rebuild() {
+  kinds.forEach(k => { k.hi.count = 0; k.lo.count = 0; if (k.glow) k.glow.count = 0; });
+  treesNear.count = treesFar.count = plinths.count = 0;
+  const tanH = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * camera.aspect;
+  for (let c = 0; c < COLS; c++) for (let r = 0; r < ROWS; r++) {
+    const x = (c - COLS / 2) * PITCH, z = Z_NEAR - r * PITCH, dist = Math.hypot(camera.position.z - z, camera.position.y);
+    if (Math.abs(x) > dist * tanH * 1.05 + PITCH * 3) continue;          // 画面外的地块不摆
+    const lot = grid[c][r], K = kinds[lot.kind], far = dist > LOD_DIST;
+    Q.setFromAxisAngle(UP, lot.rot * Math.PI / 2);
+    M.compose(V.set(x, 0, z), Q, ONE);
+    plinths.setMatrixAt(plinths.count++, M);
+    const body = far ? K.lo : K.hi;
+    body.setMatrixAt(body.count++, M);
+    if (K.glow) K.glow.setMatrixAt(K.glow.count++, M);
+    const tm = far ? treesFar : treesNear;
+    const place = (tx, tz, s, rotate) => {
+      if (tm.count >= 16000) return;
+      V2.set(tx, 0, tz); if (rotate) V2.applyQuaternion(Q);
+      Q2.setFromAxisAngle(UP, (tx * 12.9898 + tz * 78.233 + c * 3.1) % (Math.PI * 2));
+      M2.compose(V.set(x + V2.x, 0, z + V2.z), Q2, S.setScalar(s));
+      tm.setMatrixAt(tm.count++, M2);
+    };
+    K.trees.forEach(([tx, tz, s]) => place(tx, tz, s, true));
+    lot.street.forEach(([tx, tz, s]) => place(tx, tz, s, false));
+  }
+  kinds.forEach(k => { k.hi.instanceMatrix.needsUpdate = k.lo.instanceMatrix.needsUpdate = true; if (k.glow) k.glow.instanceMatrix.needsUpdate = true; });
+  treesNear.instanceMatrix.needsUpdate = treesFar.instanceMatrix.needsUpdate = plinths.instanceMatrix.needsUpdate = true;
+}
+
+// ================================================================== 后期:AO + 泛光
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+composer.addPass(new RenderPass(scene, camera));
+const gtao = new GTAOPass(scene, camera, 1, 1);
+gtao.updateGtaoMaterial({ radius: 7, distanceExponent: 1.6, thickness: 4, scale: 1.1, samples: 16, distanceFallOff: 1, screenSpaceRadius: false });
+gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 5, rings: 2, samples: 16 });
+gtao.blendIntensity = 1;
+composer.addPass(gtao);
+// 空气雾化(在 AO 之后):按深度把远处连同 AO 一起淡进底色。
+// 场景雾在 AO 之前生效,AO 会在已雾化的远景上重新压出深色锯齿;放在这里才盖得住。
+const haze = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, tDepth: { value: gtao.depthTexture }, uBg: { value: new THREE.Vector3(BG.r, BG.g, BG.b) },
+    uNear: { value: camera.near }, uFar: { value: camera.far }, uStart: { value: AERIAL ? 1150 : 600 }, uEnd: { value: AERIAL ? 2300 : 1350 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `
+    #include <packing>
+    uniform sampler2D tDiffuse; uniform sampler2D tDepth; uniform vec3 uBg;
+    uniform float uNear; uniform float uFar; uniform float uStart; uniform float uEnd;
+    varying vec2 vUv;
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      float d = texture2D(tDepth, vUv).x;
+      float dist = -perspectiveDepthToViewZ(d, uNear, uFar);
+      float f = d >= 1.0 ? 1.0 : smoothstep(uStart, uEnd, dist);
+      f = f * f * (3.0 - 2.0 * f) * .92 + step(.9999, d) * .08;
+      gl_FragColor = vec4(mix(c.rgb, uBg, f), c.a);
+    }`,
+});
+// ShaderPass 会克隆 uniforms,渲染目标上的深度贴图被克隆后是空的 —— 必须构造后再挂上原对象
+haze.uniforms.tDepth.value = gtao.depthTexture;
+composer.addPass(haze);
+const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), .32, .55, 1.15);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+// 调试:URL 参数 ?ao=0 / ?bloom=0 关闭对应后期,便于对比截图
+if (qs.get('ao') === '0') gtao.enabled = false;
+if (qs.get('bloom') === '0') bloom.enabled = false;
+if (qs.get('haze') === '0') haze.enabled = false;
+
+// 顶部水纹:画在成片之后,只占最上缘
+const water = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+  depthTest: false, depthWrite: false, transparent: true,
+  uniforms: { uTime: { value: 0 }, uAspect: { value: 1 }, uOn: { value: 1 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: `
+    uniform float uTime; uniform float uAspect; uniform float uOn; varying vec2 vUv;
+    const float TAU = 6.2831853;
+    float caustic(vec2 uv, float time) {
+      vec2 p = mod(uv * TAU, TAU) - 250.0; vec2 i = p; float c = 1.0; float inten = .005;
+      for (int n = 0; n < 5; n++) {
+        float t = time * (1.0 - (3.5 / float(n + 1)));
+        i = p + vec2(cos(t - i.x) + sin(t + i.y), sin(t - i.y) + cos(t + i.x));
+        c += 1.0 / length(vec2(p.x / (sin(i.x + t) / inten), p.y / (cos(i.y + t) / inten)));
+      }
+      c /= 5.0; c = 1.17 - pow(c, 1.4);
+      return pow(abs(c), 8.0);
+    }
+    void main() {
+      float mask = smoothstep(.74, 1.0, vUv.y) * uOn;
+      if (mask <= .001) discard;
+      float v = clamp(caustic(vec2(vUv.x * uAspect, vUv.y * 1.6) * .55, uTime * .35 + 23.0), 0.0, 1.0);
+      vec3 base = vec3(.965, .96, .95);
+      gl_FragColor = vec4(mix(base * .93, vec3(1.0), v), mask * .6);
+    }`,
+}));
+water.frustumCulled = false;
+const waterScene = new THREE.Scene(); waterScene.add(water);
+const waterCam = new THREE.Camera();
+
+// ================================================================== 尺寸
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  composer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.fov = w / h < 1 ? 44 : 30;
+  camera.updateProjectionMatrix();
+  water.material.uniforms.uAspect.value = w / h;
+  rebuild();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ================================================================== 运动
+const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+const state = { speed: 1, playing: !reduced.matches, t: 0, last: performance.now(), frames: 0, fpsT: performance.now() };
+const BASE_SPEED = 3;   // m/s,由西向东(屏幕从左往右)
+
+function advance(dt) {
+  state.t += dt;
+  city.position.x += BASE_SPEED * state.speed * dt;
+  let shifted = false;
+  while (city.position.x >= PITCH) {   // 平移满一格:内容整体东移一列,最西侧补新列 —— 画面无跳变
+    city.position.x -= PITCH;
+    grid.pop();
+    grid.unshift(Array.from({ length: ROWS }, (_, r) => newLot(r)));
+    shifted = true;
+  }
+  if (shifted) rebuild();
+  water.material.uniforms.uTime.value = state.t;
+}
+
+function draw() {
+  composer.render();
+  renderer.autoClear = false;
+  renderer.render(waterScene, waterCam);
+  renderer.autoClear = true;
+}
+
+function tick(now) {
+  const dt = Math.min(.05, (now - state.last) / 1000);
+  state.last = now;
+  if (state.playing && !document.hidden) advance(dt);
+  draw();
+  state.frames++;
+  if (now - state.fpsT > 1000) {
+    document.getElementById('h-fps').textContent = Math.round(state.frames * 1000 / (now - state.fpsT)) + ' fps';
+    state.frames = 0; state.fpsT = now;
+  }
+}
+draw();
+renderer.setAnimationLoop(tick);
+
+window.__city = {
+  renderAt(seconds) { advance(seconds); draw(); return { t: state.t, x: city.position.x }; },
+  info() {
+    return { modules: MODULES.length,
+      trisPerModule: Object.fromEntries(kinds.map(k => [k.def.key, [k.hi.geometry.attributes.position.count / 3, k.lo.geometry.attributes.position.count / 3]])),
+      placed: kinds.reduce((n, k) => n + k.hi.count + k.lo.count, 0), trees: treesNear.count + treesFar.count };
+  },
+};
+
+// ================================================================== 调试面板
+const $ = id => document.getElementById(id);
+$('h-play').textContent = state.playing ? '暂停' : '播放';
+$('h-play').onclick = () => { state.playing = !state.playing; $('h-play').textContent = state.playing ? '暂停' : '播放'; };
+$('h-speed').oninput = e => { state.speed = +e.target.value; };
+$('h-ao').onclick = () => { gtao.enabled = !gtao.enabled; $('h-ao').textContent = 'AO:' + (gtao.enabled ? '开' : '关'); };
+$('h-bloom').onclick = () => { bloom.enabled = !bloom.enabled; $('h-bloom').textContent = '泛光:' + (bloom.enabled ? '开' : '关'); };
+$('h-water').onclick = () => {
+  const on = water.material.uniforms.uOn.value ? 0 : 1;
+  water.material.uniforms.uOn.value = on; $('h-water').textContent = '水纹:' + (on ? '开' : '关');
+};
+setInterval(() => { $('h-tri').textContent = (renderer.info.render.triangles / 1e6).toFixed(2) + 'M tri'; }, 1000);
+</script>
+</body>
+</html>

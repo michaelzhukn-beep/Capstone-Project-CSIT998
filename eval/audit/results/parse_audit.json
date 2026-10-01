@@ -1,0 +1,662 @@
+[
+ {
+  "code": "K2",
+  "q": "80万以下的两房公寓",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": 2,
+   "max_price": 800000,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": "apartment",
+   "school_zone": null,
+   "sort_by": null,
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K2",
+  "q": "预算 $800k,2 bedroom apartment",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": 2,
+   "max_price": 800000,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": "apartment",
+   "school_zone": null,
+   "sort_by": null,
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K2",
+  "q": "800,000 以内 两卧 公寓",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": 2,
+   "max_price": 800000,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": "apartment",
+   "school_zone": null,
+   "sort_by": null,
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K2",
+  "q": "Budget under 800k, 2-bed unit",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": 2,
+   "max_price": 800000,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": "apartment",
+   "school_zone": null,
+   "sort_by": null,
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K2",
+  "q": "150万到200万之间的四房",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": 4,
+   "max_price": 2000000,
+   "min_gross_yield": null,
+   "min_price": 1500000,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": null,
+   "school_zone": null,
+   "sort_by": null,
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K2",
+  "q": "1.5m以下的 townhouse",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": null,
+   "max_price": 1500000,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": "townhouse",
+   "school_zone": null,
+   "sort_by": null,
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K1",
+  "q": "Richmond 附近安静的独栋",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": [
+    {
+     "attribute": "quiet",
+     "min_score": 60
+    }
+   ],
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": null,
+   "max_price": null,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": "house",
+   "school_zone": null,
+   "sort_by": "quiet",
+   "suburb": "Richmond"
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K1",
+  "q": "richmod 安静的house",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": [
+    {
+     "attribute": "quiet",
+     "min_score": 60
+    }
+   ],
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": null,
+   "max_price": null,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": "house",
+   "school_zone": null,
+   "sort_by": "quiet",
+   "suburb": "Richmond"
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K1",
+  "q": "租金回报率最高的房子,100万以内",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": null,
+   "max_price": 1000000,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": null,
+   "school_zone": null,
+   "sort_by": "gross_yield",
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K1",
+  "q": "回报率至少5%的房子",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": null,
+   "max_price": null,
+   "min_gross_yield": 0.05,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": null,
+   "school_zone": null,
+   "sort_by": "gross_yield",
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K1",
+  "q": "离火车站 500 米内的三房",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": [
+    {
+     "kind": "train_station",
+     "max_distance_m": 500
+    }
+   ],
+   "bathrooms": null,
+   "bedrooms": 3,
+   "max_price": null,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": null,
+   "school_zone": null,
+   "sort_by": null,
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K1",
+  "q": "Brunswick 3 bed house under 1.2 million, close to tram",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": [
+    {
+     "kind": "tram_stop",
+     "max_distance_m": 1500
+    }
+   ],
+   "bathrooms": null,
+   "bedrooms": 3,
+   "max_price": 1200000,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": "house",
+   "school_zone": null,
+   "sort_by": null,
+   "suburb": "Brunswick"
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K1",
+  "q": "最便宜的房子",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": null,
+   "max_price": null,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": null,
+   "school_zone": null,
+   "sort_by": "price_asc",
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K1",
+  "q": "离 Monash University 3公里内的房子",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": null,
+   "max_price": null,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": {
+    "kind": "university",
+    "max_distance_m": 3000,
+    "name": "Monash University"
+   },
+   "planning_needs": null,
+   "property_type": null,
+   "school_zone": null,
+   "sort_by": "near_place_distance",
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K1",
+  "q": "Balwyn High School 学区内的房子",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": null,
+   "max_price": null,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": null,
+   "school_zone": {
+    "level": "secondary",
+    "school": "Balwyn High School"
+   },
+   "sort_by": null,
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K1",
+  "q": "没有历史保护限制、可以翻建的房子",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": null,
+   "max_price": null,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": [
+    "no_heritage"
+   ],
+   "property_type": null,
+   "school_zone": null,
+   "sort_by": null,
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K1",
+  "q": "被低估的两房",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": 2,
+   "max_price": null,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": null,
+   "school_zone": null,
+   "sort_by": "predicted_gap",
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K1",
+  "q": "估值低于售价的房子",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": null,
+   "max_price": null,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": null,
+   "school_zone": null,
+   "sort_by": "predicted_gap_neg",
+   "suburb": null
+  },
+  "unsupported": [
+   null,
+   null,
+   null
+  ]
+ },
+ {
+  "code": "K3",
+  "q": "步行 10 分钟能到火车站的房子",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": [
+    {
+     "kind": "train_station",
+     "max_distance_m": 800
+    }
+   ],
+   "bathrooms": null,
+   "bedrooms": null,
+   "max_price": null,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": null,
+   "school_zone": null,
+   "sort_by": null,
+   "suburb": null
+  },
+  "unsupported": [
+   [
+    "步行时间"
+   ],
+   [
+    "步行时间"
+   ],
+   [
+    "步行时间"
+   ]
+  ]
+ },
+ {
+  "code": "K3",
+  "q": "学校排名前十的学区房",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": [
+    {
+     "attribute": "school_access",
+     "min_score": 60
+    }
+   ],
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": null,
+   "max_price": null,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": null,
+   "school_zone": null,
+   "sort_by": "school_access",
+   "suburb": null
+  },
+  "unsupported": [
+   [
+    "学校排名"
+   ],
+   [
+    "学校排名"
+   ],
+   [
+    "学校排名"
+   ]
+  ]
+ },
+ {
+  "code": "K3",
+  "q": "开车 20 分钟能到 CBD 的房子",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": null,
+   "max_price": null,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": null,
+   "school_zone": null,
+   "sort_by": null,
+   "suburb": null
+  },
+  "unsupported": [
+   [
+    "驾车时间",
+    "到 CBD 的距离要求"
+   ],
+   [
+    "驾车时间",
+    "到 CBD 的距离要求"
+   ],
+   [
+    "驾车时间",
+    "到 CBD 的距离要求"
+   ]
+  ]
+ },
+ {
+  "code": "K3",
+  "q": "朝北、采光好的房子",
+  "status": "PASS",
+  "stable": true,
+  "errors": [],
+  "params": {
+   "abstract_needs": null,
+   "amenity_needs": null,
+   "bathrooms": null,
+   "bedrooms": null,
+   "max_price": null,
+   "min_gross_yield": null,
+   "min_price": null,
+   "near_place": null,
+   "planning_needs": null,
+   "property_type": null,
+   "school_zone": null,
+   "sort_by": null,
+   "suburb": null
+  },
+  "unsupported": [
+   [
+    "采光朝向"
+   ],
+   [
+    "采光朝向"
+   ],
+   [
+    "采光朝向"
+   ]
+  ]
+ }
+]

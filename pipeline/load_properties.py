@@ -3,16 +3,18 @@
 
 # %%
 import math
+import sys
+from pathlib import Path
 
 import pandas as pd
 import psycopg2
 import torch
 from sentence_transformers import SentenceTransformer
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.core.config import DB_DSN                                  # noqa: E402  和服务端同一份 .env,不再硬编码
+
 INPUT_CSV = "data/property_with_description.csv"
-# 端口与 db/docker-compose.yml 一致(宿主 15432 -> 容器 5432)。
-# 此处仍是硬编码,app/ 已改为从 app.core.config 读取;见 TODO。
-DB_DSN = "postgresql://capstone:capstone@localhost:15432/capstone"
 MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 BATCH_SIZE = 256
 
@@ -72,10 +74,8 @@ print("Embedding shape:", embeddings.shape)
 # %% [markdown]
 # ## Map dataframe columns -> contracts.md schema
 #
-# `car_spaces` missing -> 0, per contracts.md's own documented default (not
-# something we invented — the schema explicitly says "Default 0 when
-# unknown" for this one column, unlike annual_rent/description which
-# required a grounded fallback instead of a default).
+# Car missing means unknown, stored as NULL; a recorded 0 stays 0.
+# Existing database rows require a separate reviewed reload and model retrain.
 
 # %%
 def to_pynone(value):
@@ -94,7 +94,7 @@ def row_to_record(row):
         "price": int(row.Price) if pd.notna(row.Price) else None,
         "bedrooms": int(row.Bedroom2),
         "bathrooms": int(row.Bathroom),
-        "car_spaces": int(row.Car) if pd.notna(row.Car) else 0,
+        "car_spaces": int(row.Car) if pd.notna(row.Car) else None,   # 缺失 = 未知(NULL),不是 0;0 只表示记录里确有 0 个车位
         "land_size": to_pynone(row.Landsize),
         "building_area": to_pynone(row.BuildingArea),
         "year_built": int(row.YearBuilt) if pd.notna(row.YearBuilt) and 1840 <= row.YearBuilt <= 2020 else None,

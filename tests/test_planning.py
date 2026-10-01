@@ -165,19 +165,37 @@ assert "planning_needs" in PARAM_KEYS
 # V4 的 abstract_needs 就是因为示例里没有,整个字段从来没被输出过。
 import json  # noqa: E402
 
-from app.orchestration.graph import _PARSE_SYSTEM  # noqa: E402
+from app.orchestration.graph import _PARSE_SYSTEM, PROGRAM_KEYS  # noqa: E402
 
 examples = [line for line in _PARSE_SYSTEM.splitlines()
             if line.startswith('{"intent"')]
 assert len(examples) >= 10, f"提示词里只找到 {len(examples)} 个示例,是不是被改坏了"
+# 模型要填的字段 = PARAM_KEYS 减去程序自己算的那几个(relative_preferences 由 changes 算出)
+model_keys = set(PARAM_KEYS) - set(PROGRAM_KEYS)
+refine_examples = []
 for line in examples:
     parsed = json.loads(line)
+    if parsed["intent"] == "refine":
+        # 多轮修改协议:refine 只列本轮变更,不整份重填条件。
+        # 示例一旦回到"整份重填",模型就会跟着示例走,refinement.apply_changes 拿不到 changes。
+        assert set(parsed) == {"intent", "changes", "clarification"}, (
+            f"refine 示例只能有 intent/changes/clarification,实际:{sorted(parsed)}\n  {line[:120]}")
+        assert parsed["changes"] and all({"action", "field", "source"} <= set(c) for c in parsed["changes"]), (
+            f"refine 示例的每条 change 都要有 action/field/source:{line[:120]}")
+        refine_examples.append(parsed)
+        continue
     fields = set(parsed) - {"intent"}          # intent 是意图,不是检索参数
-    assert fields == set(PARAM_KEYS), (
-        f"示例的字段和 PARAM_KEYS 对不上:\n  多了 {fields - set(PARAM_KEYS)}\n"
-        f"  少了 {set(PARAM_KEYS) - fields}\n  {line[:120]}")
+    assert fields == model_keys, (
+        f"示例的字段和 PARAM_KEYS 对不上:\n  多了 {fields - model_keys}\n"
+        f"  少了 {model_keys - fields}\n  {line[:120]}")
     for value in parsed["planning_needs"]:
         assert value in _PLANNING_NEEDS, f"示例里用了词表外的 planning_needs:{value}"
+assert refine_examples, "提示词里没有 refine 示例了 —— 模型会不知道多轮修改该输出 changes"
+examples = [line for line in examples if json.loads(line)["intent"] != "refine"]
+
+# 同理,至少一个示例真的用到 description_query,否则模型只会学会永远填 null
+assert any(json.loads(line)["description_query"] for line in examples), (
+    "没有一个示例真的用到 description_query —— 模型会学成永远填 null")
 
 # 至少要有一个示例**真的用到**这个字段,否则模型只会学会永远填 []
 assert any(json.loads(line)["planning_needs"] for line in examples), (

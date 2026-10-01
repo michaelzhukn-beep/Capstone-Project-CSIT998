@@ -72,13 +72,14 @@ def snapshot() -> dict:
     return dict(_current)
 
 
-def describe() -> list[str]:
-    """人话版说明,给 CLI 打印、给 LLM 当事实。"""
+def describe(snap: dict | None = None) -> list[str]:
+    """人话版说明。可描述给定快照;省略参数时仍描述进程级值,从不修改它。"""
+    values = _current if snap is None else snap
     out = []
-    for key, value in _current.items():
-        spec = _SPEC[key]
+    for key, spec in _SPEC.items():
+        value = values[key]
         out.append(spec["label"].format(
             pct=f"{value * 100:.1f}%" if spec["kind"] == "rate" else "",
-            money=f"${value:,}" if spec["kind"] == "money" else "",
+            money=f"${int(value):,}" if spec["kind"] == "money" else "",
         ))
     return out

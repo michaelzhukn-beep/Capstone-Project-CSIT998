@@ -416,5 +416,106 @@
   "excluded_features": {
     "months_since_start": "去掉后 MAE 更低;数据仅跨 26 个月,无趋势可学",
     "annual_rent": "去掉代价 0.4%,换取估值与租金回报率两个信号互相独立"
+  },
+  "conformal": {
+    "levels": {
+      "0.8": {
+        "apartment": {
+          "q": 0.23574361987335912,
+          "n": 3493,
+          "down_pct": 0.21001681603933176,
+          "up_pct": 0.26584972984663957,
+          "coverage_mean": 0.799433314253005,
+          "coverage_p5": 0.779593589009731,
+          "coverage_p95": 0.8196908986834573,
+          "coverage_2018_rows": 0.75,
+          "widened_by_time_split": false
+        },
+        "house": {
+          "q": 0.19517995769355068,
+          "n": 15728,
+          "down_pct": 0.17731340404836193,
+          "up_pct": 0.21552971073177107,
+          "coverage_mean": 0.8005083926754832,
+          "coverage_p5": 0.7899097151576806,
+          "coverage_p95": 0.8110503560528993,
+          "coverage_2018_rows": 0.8362980149523073,
+          "widened_by_time_split": false
+        },
+        "townhouse": {
+          "q": 0.20012646431742276,
+          "n": 1579,
+          "down_pct": 0.1813727806010632,
+          "up_pct": 0.22155723179377418,
+          "coverage_mean": 0.8010987341772152,
+          "coverage_p5": 0.7683544303797468,
+          "coverage_p95": 0.8317088607594936,
+          "coverage_2018_rows": 0.8240343347639485,
+          "widened_by_time_split": false
+        },
+        "__all__": {
+          "q": 0.20167272909727352,
+          "n": 20800,
+          "down_pct": 0.1826376169003242,
+          "up_pct": 0.22344754380267573,
+          "coverage_mean": 0.7999394230769231,
+          "coverage_p5": 0.7913413461538461,
+          "coverage_p95": 0.8083846153846154,
+          "coverage_2018_rows": 0.8439903846153847,
+          "widened_by_time_split": false
+        }
+      },
+      "0.9": {
+        "apartment": {
+          "q": 0.3136984427913454,
+          "n": 3493,
+          "down_pct": 0.2692606453427221,
+          "up_pct": 0.36847700021440244,
+          "coverage_mean": 0.9009650829994276,
+          "coverage_p5": 0.884373211219233,
+          "coverage_p95": 0.9170005724098454,
+          "coverage_2018_rows": 0.875,
+          "widened_by_time_split": false
+        },
+        "house": {
+          "q": 0.26939604568938336,
+          "n": 15728,
+          "down_pct": 0.23615932007341178,
+          "up_pct": 0.30917353092022903,
+          "coverage_mean": 0.9002199898270601,
+          "coverage_p5": 0.8924148016276704,
+          "coverage_p95": 0.90882502543235,
+          "coverage_2018_rows": 0.9213714874967776,
+          "widened_by_time_split": false
+        },
+        "townhouse": {
+          "q": 0.267067499660568,
+          "n": 1579,
+          "down_pct": 0.23437860946281386,
+          "up_pct": 0.30612860659283014,
+          "coverage_mean": 0.9014708860759495,
+          "coverage_p5": 0.8835443037974684,
+          "coverage_p95": 0.9253164556962026,
+          "coverage_2018_rows": 0.9055793991416309,
+          "widened_by_time_split": false
+        },
+        "__all__": {
+          "q": 0.2781904295774442,
+          "n": 20800,
+          "down_pct": 0.24284737646916899,
+          "up_pct": 0.32073768078184606,
+          "coverage_mean": 0.8999457692307692,
+          "coverage_p5": 0.8933605769230769,
+          "coverage_p95": 0.9066346153846154,
+          "coverage_2018_rows": 0.9240384615384616,
+          "widened_by_time_split": false
+        }
+      }
+    },
+    "repeats": 500,
+    "n_calibration": 20800,
+    "calibration": "K-fold out-of-fold residuals on all rows; q = max(OOF, time-split holdout) per type",
+    "display_level": 0.8,
+    "note": "区间 = 估值·e^(∓q),q 为分房型分割保形分位数;coverage_* 为全库离折残差随机对半 500 次的实测覆盖率(含按时间留出集放宽的规则)"
   }
 }

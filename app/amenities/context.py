@@ -121,12 +121,25 @@ def warm_up() -> dict:
                 - set(BY_TYPE_KEYS))}
 
 
+# 每间卧室至少要有这么多建筑面积,低于它的 building_area 当作录错、视为缺失。
+# 审计实测(eval/audit BUG-06):93 套 building_area 在 0~20 ㎡,其中 47 套恰好等于卧室数
+# (4 房独栋 1 ㎡)—— 是把卧室数填进了面积列。10 ㎡/间是宽松下限:最小的一房公寓也有 25 ㎡ 左右。
+MIN_BUILDING_M2_PER_BEDROOM = 10
+MIN_BUILDING_M2 = 20          # 不论几房,整套住宅低于 20 ㎡ 也视为录错
+
+
 def _size_m2(prop: dict):
     """"宽敞"用哪个面积:有建筑面积优先(那才是住的面积),否则退回地块面积。
-    公寓只有 41% 有地块面积,所以这个回退顺序对公寓尤其要紧。"""
+    公寓只有 41% 有地块面积,所以这个回退顺序对公寓尤其要紧。
+
+    明显录错的面积(不到 20 ㎡,或每间卧室不到 10 ㎡)当作没有。两个面积用同一条下限:
+    放行一个 15 ㎡ 的「地块」和放行一个 15 ㎡ 的「建筑」是同一个错。
+    **不改数据集**,只是不拿它打分 —— 拿 1 ㎡ 去排「宽敞」,等于把录入错误当成事实。"""
+    bedrooms = prop.get("bedrooms")
+    floor = max(MIN_BUILDING_M2, MIN_BUILDING_M2_PER_BEDROOM * (bedrooms if isinstance(bedrooms, (int, float)) else 1))
     for key in ("building_area", "land_size"):
         value = prop.get(key)
-        if isinstance(value, (int, float)) and value > 0:
+        if isinstance(value, (int, float)) and value >= floor:
             return float(value)
     return None
 
@@ -154,7 +167,8 @@ def collect_evidence(lat, lon, amenities: dict | None = None, prop: dict | None 
         if value is not None:
             out[key] = value
 
-    prop = prop or {}
+    # 坐标一并带上:距 CBD 要按坐标算,调用方的 prop 里不一定有经纬度
+    prop = {**(prop or {}), "latitude": lat, "longitude": lon}
     out.update(_property_evidence(prop))
     return out
 
@@ -162,8 +176,9 @@ def collect_evidence(lat, lon, amenities: dict | None = None, prop: dict | None 
 def _property_evidence(prop: dict) -> dict:
     """房源自身列 + 按区查表得来的证据。两者都不来自 OSM,所以单独一处。"""
     out = {}
-    if isinstance(prop.get("distance_cbd"), (int, float)):
-        out["distance_cbd_km"] = round(float(prop["distance_cbd"]), 1)
+    cbd_km = nearby.distance_to_cbd_km(prop.get("latitude"), prop.get("longitude"), prop.get("distance_cbd"))
+    if cbd_km is not None:
+        out["distance_cbd_km"] = cbd_km
     size = _size_m2(prop)
     if size is not None:
         out["size_m2"] = int(round(size))

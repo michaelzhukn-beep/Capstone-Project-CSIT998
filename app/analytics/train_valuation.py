@@ -318,6 +318,18 @@ def main(save: bool = True) -> None:
     for ptype, info in sorted(per_type.items()):
         print(f"  {ptype:<12}{info['mdape']*100:>6.1f}%   (n={info['n']}, {info['split']} 划分)")
 
+    # 模型一换,库内房源的离折估值和旧的区间参数就都失效了。训练完立刻重算,
+    # 不留"模型是新的、离折估值和区间是旧的"的窗口。
+    # (放在函数里导入:这两个模块本身依赖本模块。)
+    print()
+    print("重算库内房源的离折估值(K 折交叉拟合):")
+    from app.analytics.crossfit_valuation import main as crossfit
+    crossfit()
+    print()
+    print("重新校准估值区间(分割保形预测):")
+    from app.analytics.calibrate_valuation import main as calibrate
+    calibrate(write=True)
+
 
 if __name__ == "__main__":
     try:

@@ -54,7 +54,10 @@ OSM 各类标签的完整度差别极大。加之前先在 Overpass 上数一下
 #   point —— 用 `out center`,取质心。适合建筑、站点这类小要素。
 #   line  —— 用 `out geom`,沿线按 RESAMPLE_M 米重采样。**道路、铁路必须用这个**:
 #            一条 20 公里的高速,质心可能在离你 10 公里的地方,毫无意义。
-#   area  —— 同 line,采的是边界轮廓。适合工业区这类"边界才重要"的面。
+#   area  —— 同 line,采的是边界轮廓。适合工业区、公园这类"边界才重要"的面。
+#            **公园按质心算是错的**:审计实测 Richmond 片区 11% 的房源"距公园"被报远了
+#            100 米以上(249 Punt Rd 报 301 米,实际到公园边 39 米)。面要素另外保留一个
+#            带名字的中心点,供"最近的公园叫什么""离 Albert Park 近"按名字查找用。
 #
 # measure:
 #   nearest —— 算到最近一个的距离,证据键为 <kind>_m
@@ -68,10 +71,12 @@ OSM 各类标签的完整度差别极大。加之前先在 Overpass 上数一下
 # match:
 #   ("amenity", ("hospital",))  —— 标签 amenity=hospital
 #   ("shop", "*")               —— 只要带 shop 这个键就算
+#   exclude 同样写法,命中就**不算**这个源(如铁路线排除带 service 标签的侧线)
 #   **显式声明,不从 overpass 字符串里反解。** 反解看着省事,实际是靠字符串
 #   匹配猜标签,加一个带正则的源就会悄悄失配 —— 不报错,只是那个源永远是空的。
 #
-# count 里的数字是 2026-09-08 在大墨尔本实测的数量,用来判断这个源够不够用。
+# count 里的数字是在大墨尔本实测的数量(2026-09-08;三级路、电车线、酒吧夜店、商店餐饮为 2026-09-15),
+# 用来判断这个源够不够用。线状源记的是 OSM 线段(way)条数。
 
 SOURCES = {
     # ---- 交通 ----
@@ -155,11 +160,11 @@ SOURCES = {
     "park": {
         "match": ("leisure", ('park', 'garden')),
         "zh": "公园绿地", "overpass": 'nwr["leisure"~"^(park|garden)$"]',
-        "geometry": "point", "measure": "nearest", "user_facing": True, "count": 16785},
+        "geometry": "area", "measure": "nearest", "user_facing": True, "count": 16785},
     "beach": {
         "match": ("natural", ('beach',)),
         "zh": "海滩", "overpass": 'nwr["natural"="beach"]',
-        "geometry": "point", "measure": "nearest", "user_facing": True, "count": 223},
+        "geometry": "area", "measure": "nearest", "user_facing": True, "count": 223},
 
     # ---- 环境:负面(离得越远越好)----
     "major_road": {
@@ -176,9 +181,24 @@ SOURCES = {
         "match": ("highway", ('secondary',)),
         "zh": "次干道", "overpass": 'way["highway"~"^(secondary)$"]',
         "geometry": "line", "measure": "nearest", "user_facing": False, "count": 12849},
+    # 三级路和电车线。起因(审计 BUG-08):安静分原本看不到它们 —— Richmond 片区离三级路
+    # ≤25 米的房源安静分中位 30、≥150 米的中位 29,分数完全区分不了"贴着车流"和"远离车流"。
+    # 住宅小街(residential)**不加**:几乎每套房都临一条,加进来只会让分数整体平移。
+    "tertiary_road": {
+        "match": ("highway", ('tertiary',)),
+        "zh": "三级路", "overpass": 'way["highway"="tertiary"]',
+        "geometry": "line", "measure": "nearest", "user_facing": False, "count": 33326},
+    "tram_line": {
+        # 车厂、侧线同样排除(理由同下面的 railway)
+        "match": ("railway", ('tram',)), "exclude": ("service", "*"),
+        "zh": "电车线", "overpass": 'way["railway"="tram"]',
+        "geometry": "line", "measure": "nearest", "user_facing": False, "count": 1032},
     "railway": {
-        "match": ("railway", ('rail',)),
-        "zh": "铁路线", "overpass": 'way["railway"="rail"]["service"!~"."]',
+        # 带 service 标签的是站场、侧线、检修线,不走客运列车,不算噪音源。
+        # 这个排除原本写在 Overpass 查询里(["service"!~"."]),负向正则在公共端点上
+        # 反复 504 超时,于是挪到本地:查询只取 railway=rail,抓回来再按 exclude 剔掉。
+        "match": ("railway", ('rail',)), "exclude": ("service", "*"),
+        "zh": "铁路线", "overpass": 'way["railway"="rail"]',
         "geometry": "line", "measure": "nearest", "user_facing": False, "count": 2517},
     "industrial": {
         "match": ("landuse", ('industrial',)),
@@ -195,22 +215,24 @@ SOURCES = {
     "cemetery": {
         "match": ("landuse", ('cemetery',)),
         "zh": "墓地", "overpass": 'nwr["landuse"="cemetery"]',
-        "geometry": "point", "measure": "nearest", "user_facing": False, "count": 79},
+        "geometry": "area", "measure": "nearest", "user_facing": False, "count": 79},
 
     # ---- 密度类(数半径内有几个,不是算距离)----
+    # 只算真正的夜间场所。餐厅和快餐原本也在这里,结果 300 米内出现第一家外卖店,
+    # 安静分就掉 16 分 —— 和开了一家夜店扣得一样多(审计 BUG-09)。餐饮挪到下面的 shop。
     "nightlife": {
-        "match": ("amenity", ('bar', 'pub', 'nightclub', 'restaurant', 'fast_food')),
-        "zh": "夜间营业场所",
-        "overpass": 'nwr["amenity"~"^(bar|pub|nightclub|restaurant|fast_food)$"]',
+        "match": ("amenity", ('bar', 'pub', 'nightclub')),
+        "zh": "酒吧夜店",
+        "overpass": 'nwr["amenity"~"^(bar|pub|nightclub)$"]',
         "geometry": "point", "measure": "count", "radius_m": 300,
-        "user_facing": False, "count": 8353},
+        "user_facing": False, "count": 1186},
     "shop": {
-        # 只要带 shop 标签的都算,外加咖啡馆。"*" = 只看这个键存不存在。
-        "match": ("shop", "*"), "extra_match": ("amenity", ("cafe",)),
+        # 只要带 shop 标签的都算,外加咖啡馆、餐厅、快餐。"*" = 只看这个键存不存在。
+        "match": ("shop", "*"), "extra_match": ("amenity", ("cafe", "restaurant", "fast_food")),
         "zh": "商店餐饮",
-        "overpass": 'nwr["shop"];nwr["amenity"="cafe"]',
+        "overpass": 'nwr["shop"];nwr["amenity"~"^(cafe|restaurant|fast_food)$"]',
         "geometry": "point", "measure": "count", "radius_m": 800,
-        "user_facing": False, "count": 21678},
+        "user_facing": False, "count": 28931},
 }
 
 # 沿线/沿边界重采样的间距(米)。50 米意味着距离误差上界 25 米,对噪音评估足够。
@@ -274,23 +296,22 @@ ATTRIBUTES = {
         "zh": "安静",
         "synonyms": ["安静", "清静", "不吵", "僻静", "别靠马路", "别靠铁路",
                      "怕吵", "睡眠浅", "闹中取静", "清净"],
-        # 权重:次干道按主干道的六成计(噪音量级低一档,但不能不算),
-        # 其余四项保持原来的相对比例后归一化。
-        #   原:主干道 .35 铁路 .20 夜生活 .30 工业 .15
-        #   新:主干道 .29 次干道 .17 铁路 .17 夜生活 .25 工业 .12
-        # 实测影响:全库安静分中位 61 -> 58;紧挨次干道(≤80m)那 134 套
-        # 中位 64 -> 54,其中原本被评为"安静 ≥70"的 46 套只剩 9 套。
-        "parts": {"major_road_m": ("far", 0.29), "secondary_road_m": ("far", 0.17),
-                  "railway_m": ("far", 0.17), "nightlife_300m": ("few", 0.25),
-                  "industrial_m": ("far", 0.12)},
-        "note": "远离主干道与次干道、铁路线与工业区,周边夜间营业场所少",
+        # 权重按噪音量级递减:主干道 > 次干道 ≈ 铁路 > 三级路 > 电车线。
+        #   V5:主干道 .29 次干道 .17 铁路 .17 夜生活 .25 工业 .12
+        #   现:主干道 .26 次干道 .15 三级路 .10 铁路 .14 电车线 .07 夜生活 .18 工业 .10
+        # 夜生活从 .25 降到 .18:它现在只数酒吧/夜店/pub,不再含餐厅快餐,数量少了一个量级。
+        "parts": {"major_road_m": ("far", 0.26), "secondary_road_m": ("far", 0.15),
+                  "tertiary_road_m": ("far", 0.10), "railway_m": ("far", 0.14),
+                  "tram_line_m": ("far", 0.07), "nightlife_300m": ("few", 0.18),
+                  "industrial_m": ("far", 0.10)},
+        "note": "远离主干道、次干道、三级路、铁路与电车线和工业区,周边酒吧夜店少",
     },
     "lively": {
         "zh": "热闹",
         "synonyms": ["热闹", "繁华", "有人气", "烟火气", "夜生活", "年轻人多",
                      "别太冷清", "市口好"],
         "parts": {"shop_800m": ("many", 0.55), "nightlife_300m": ("many", 0.45)},
-        "note": "周边商店餐饮与夜间场所密集",
+        "note": "周边商店餐饮与酒吧夜店密集",
     },
     "convenient": {
         "zh": "生活便利",
@@ -396,7 +417,8 @@ ATTRIBUTES = {
 }
 ATTRIBUTE_KEYS = tuple(ATTRIBUTES)
 
-# 互斥的属性对。用户同时要,系统要指出来而不是照单全收。
+# 可能存在取舍的属性对,不是逻辑互斥。保留两项并用实际候选验证交集。
+# 名称保留兼容旧调用方;不允许据此自动删除条件。
 CONFLICTS = (("quiet", "lively"),)
 
 # **数据里根本没有的东西。** 问到这些必须明确回答"本系统没有这项数据",

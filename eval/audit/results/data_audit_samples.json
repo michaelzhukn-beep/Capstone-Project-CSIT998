@@ -1,0 +1,547 @@
+{
+ "A3": [
+  {
+   "id": 136,
+   "address": "7/7 Chandler Hwy",
+   "suburb": "Alphington",
+   "price": 650000,
+   "bedrooms": 0,
+   "bathrooms": 1,
+   "car_spaces": 0
+  },
+  {
+   "id": 140,
+   "address": "6 Naroon Rd",
+   "suburb": "Alphington",
+   "price": 1485000,
+   "bedrooms": 3,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 282,
+   "address": "3/50 Denbigh Rd",
+   "suburb": "Armadale",
+   "price": 546000,
+   "bedrooms": 2,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 380,
+   "address": "115 Ashburn Gr",
+   "suburb": "Ashburton",
+   "price": 2950000,
+   "bedrooms": 9,
+   "bathrooms": 7,
+   "car_spaces": 4
+  },
+  {
+   "id": 506,
+   "address": "5/11 Albion St",
+   "suburb": "Balaclava",
+   "price": 497500,
+   "bedrooms": 2,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 581,
+   "address": "29 Sevenoaks St",
+   "suburb": "Balwyn",
+   "price": 3900000,
+   "bedrooms": 5,
+   "bathrooms": 7,
+   "car_spaces": 6
+  },
+  {
+   "id": 585,
+   "address": "5 Shrimpton Ct",
+   "suburb": "Balwyn",
+   "price": 1010000,
+   "bedrooms": 2,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 805,
+   "address": "17a Edinburgh St",
+   "suburb": "Bentleigh East",
+   "price": 830000,
+   "bedrooms": 0,
+   "bathrooms": 2,
+   "car_spaces": 2
+  },
+  {
+   "id": 828,
+   "address": "7 Wallace St",
+   "suburb": "Bentleigh East",
+   "price": 1355000,
+   "bedrooms": 0,
+   "bathrooms": 1,
+   "car_spaces": 2
+  },
+  {
+   "id": 914,
+   "address": "579 Warrigal Rd",
+   "suburb": "Bentleigh East",
+   "price": 700000,
+   "bedrooms": 0,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 1064,
+   "address": "17 New St",
+   "suburb": "Brighton",
+   "price": 1900000,
+   "bedrooms": 3,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 1071,
+   "address": "1/5 Webb St",
+   "suburb": "Brighton",
+   "price": 1067000,
+   "bedrooms": 3,
+   "bathrooms": 0,
+   "car_spaces": 1
+  },
+  {
+   "id": 1596,
+   "address": "5 Nicholsdale Rd",
+   "suburb": "Camberwell",
+   "price": 1400000,
+   "bedrooms": 3,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 2257,
+   "address": "5/29 Nepean Hwy",
+   "suburb": "Elsternwick",
+   "price": 410000,
+   "bedrooms": 0,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 2783,
+   "address": "25 Hope St",
+   "suburb": "Glen Iris",
+   "price": 845000,
+   "bedrooms": 2,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 2803,
+   "address": "130 High St",
+   "suburb": "Glen Iris",
+   "price": 1550000,
+   "bedrooms": 4,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 2814,
+   "address": "1/64 Edgar St N",
+   "suburb": "Glen Iris",
+   "price": 545000,
+   "bedrooms": 3,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 3368,
+   "address": "20 Locksley Rd",
+   "suburb": "Ivanhoe",
+   "price": 2400000,
+   "bedrooms": 0,
+   "bathrooms": 2,
+   "car_spaces": 2
+  },
+  {
+   "id": 3398,
+   "address": "5/125 Locksley Rd",
+   "suburb": "Ivanhoe",
+   "price": 460000,
+   "bedrooms": 2,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 3565,
+   "address": "7/51 Epsom Rd",
+   "suburb": "Kensington",
+   "price": 526000,
+   "bedrooms": 2,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 3797,
+   "address": "42 Cressy St",
+   "suburb": "Malvern",
+   "price": 780000,
+   "bedrooms": 2,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 4890,
+   "address": "19 Malpas St",
+   "suburb": "Preston",
+   "price": 1004000,
+   "bedrooms": 3,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 4990,
+   "address": "421 Murray Rd",
+   "suburb": "Preston",
+   "price": 760000,
+   "bedrooms": 9,
+   "bathrooms": 8,
+   "car_spaces": 7
+  },
+  {
+   "id": 5545,
+   "address": "3 Park Pl",
+   "suburb": "South Melbourne",
+   "price": 760500,
+   "bedrooms": 2,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 5652,
+   "address": "82/390 Toorak Rd",
+   "suburb": "South Yarra",
+   "price": 1072000,
+   "bedrooms": 3,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 5722,
+   "address": "2/28 Tivoli Pl",
+   "suburb": "South Yarra",
+   "price": 910000,
+   "bedrooms": 2,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 6181,
+   "address": "14 Scheele St",
+   "suburb": "Surrey Hills",
+   "price": 1560000,
+   "bedrooms": 0,
+   "bathrooms": 2,
+   "car_spaces": 1
+  },
+  {
+   "id": 6403,
+   "address": "1/183 Kooyong Rd",
+   "suburb": "Toorak",
+   "price": 857000,
+   "bedrooms": 2,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 6418,
+   "address": "6/183 Kooyong Rd",
+   "suburb": "Toorak",
+   "price": 866000,
+   "bedrooms": 2,
+   "bathrooms": 0,
+   "car_spaces": 0
+  },
+  {
+   "id": 6664,
+   "address": "1/53 Stephen St",
+   "suburb": "Yarraville",
+   "price": 410000,
+   "bedrooms": 2,
+   "bathrooms": 0,
+   "car_spaces": 0
+  }
+ ],
+ "A4b": [
+  {
+   "id": 19713,
+   "address": "16 Allunga Wy",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 32.47
+  },
+  {
+   "id": 18913,
+   "address": "5 Wongabeena Gr",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 32.4
+  },
+  {
+   "id": 20249,
+   "address": "11 Taisho Ct",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 31.05
+  },
+  {
+   "id": 19716,
+   "address": "9 Noelhurst Ct",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 31.03
+  },
+  {
+   "id": 17716,
+   "address": "17 Taisho Ct",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 30.97
+  },
+  {
+   "id": 11894,
+   "address": "5 Flourish Wy",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 30.8
+  },
+  {
+   "id": 9401,
+   "address": "10 Wallara Rd",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 30.57
+  },
+  {
+   "id": 11898,
+   "address": "17 Timbarra Dr",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 30.56
+  },
+  {
+   "id": 20779,
+   "address": "34 Westleigh Dr",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 30.51
+  },
+  {
+   "id": 15632,
+   "address": "91 Ballan Rd",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 30.33
+  },
+  {
+   "id": 15247,
+   "address": "4 Daniel Ct",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 30.31
+  },
+  {
+   "id": 17111,
+   "address": "8 Charinga Dr",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 30.3
+  },
+  {
+   "id": 13922,
+   "address": "29 Briardale Dr",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 30.3
+  },
+  {
+   "id": 8679,
+   "address": "649 Queensberry St",
+   "suburb": "North Melbourne",
+   "distance_cbd": 2.3,
+   "coord_km": 17.83
+  },
+  {
+   "id": 17717,
+   "address": "9 Tanilba St",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 30.13
+  },
+  {
+   "id": 18642,
+   "address": "21 Westminster Dr",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 30.02
+  },
+  {
+   "id": 17711,
+   "address": "15 Coventry Dr",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 29.96
+  },
+  {
+   "id": 9396,
+   "address": "3 Lyall Dr",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 29.94
+  },
+  {
+   "id": 20246,
+   "address": "61 Rowes Rd",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 29.89
+  },
+  {
+   "id": 19714,
+   "address": "10 Galvin Rd",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 29.87
+  },
+  {
+   "id": 13923,
+   "address": "31 Hooker Rd",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 29.73
+  },
+  {
+   "id": 12239,
+   "address": "46 Coventry Dr",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 29.72
+  },
+  {
+   "id": 16023,
+   "address": "10 Adam Ct",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 29.69
+  },
+  {
+   "id": 15249,
+   "address": "39 Hooker Rd",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 29.69
+  },
+  {
+   "id": 14447,
+   "address": "32 Hooker Rd",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 29.64
+  },
+  {
+   "id": 19466,
+   "address": "7 Xavier Ct",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 29.64
+  },
+  {
+   "id": 11895,
+   "address": "34 Hooker Rd",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 29.63
+  },
+  {
+   "id": 10584,
+   "address": "9 Jamieson Ct",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 29.61
+  },
+  {
+   "id": 13048,
+   "address": "4 Denise Ct",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 29.59
+  },
+  {
+   "id": 18636,
+   "address": "5 Denise Ct",
+   "suburb": "Werribee",
+   "distance_cbd": 14.7,
+   "coord_km": 29.58
+  }
+ ],
+ "B4": [
+  {
+   "id": 1808,
+   "address": "30 Pyne St",
+   "type": "house",
+   "price": 131000,
+   "rent": 41860,
+   "yield": 0.3195
+  },
+  {
+   "id": 1931,
+   "address": "171 Moreland Rd",
+   "type": "house",
+   "price": 145000,
+   "rent": 24960,
+   "yield": 0.1721
+  },
+  {
+   "id": 2657,
+   "address": "202/51 Gordon St",
+   "type": "apartment",
+   "price": 85000,
+   "rent": 13520,
+   "yield": 0.1591
+  },
+  {
+   "id": 7316,
+   "address": "8/6 Ridley St",
+   "type": "apartment",
+   "price": 145000,
+   "rent": 16296,
+   "yield": 0.1124
+  },
+  {
+   "id": 5310,
+   "address": "303/18 Tanner St",
+   "type": "house",
+   "price": 270000,
+   "rent": 30160,
+   "yield": 0.1117
+  },
+  {
+   "id": 7955,
+   "address": "17/17 Park St",
+   "type": "apartment",
+   "price": 160000,
+   "rent": 16640,
+   "yield": 0.104
+  },
+  {
+   "id": 5718,
+   "address": "9/501 Punt Rd",
+   "type": "apartment",
+   "price": 260800,
+   "rent": 26520,
+   "yield": 0.1017
+  }
+ ],
+ "H2": [
+  {}
+ ]
+}

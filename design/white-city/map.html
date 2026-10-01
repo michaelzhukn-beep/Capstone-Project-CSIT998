@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>白模城市 · 地图浮雕原型 · 筑明AI</title>
+<!--
+  实验原型(experimental),不是线上首页。方案 A:真实城区白模。
+  - 数据:city.js(由 build_city.py 从 OpenStreetMap 生成)—— 墨尔本 CBD 东缘 → Richmond → Yarra 河湾。
+    真实建筑按标注高度拉伸;OSM 缺失的郊区住宅由脚本沿街补了普通体块(单独存放,只作视觉底色)。
+  - 观感:高位斜俯视 + 一侧强主光与软阴影 + 环境光遮蔽 + 主干道暖色光带(泛光)+ 上下沿景深虚化 + 远处雾化。
+  - 运动:镜头向西缓移,画面上城市由西向东移动;走到区域尽头时淡出、回到起点、淡入。
+  直接双击打开即可(需联网加载 Three.js 与字体)。地图数据 © OpenStreetMap contributors,ODbL。
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Serif+SC:wght@500;600&display=swap">
+<style>
+  :root {
+    --bg: #F4F1EC; --ink: #151614; --sub: #5B5953; --mute: #8B8882; --line: rgba(60, 56, 48, .18);
+    --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun", serif;
+    --sans: -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    -webkit-font-smoothing: antialiased; overflow: hidden; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+
+  #city { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  /* 横视角(默认):城市只在下方,顶上是雾化的白;只需底边淡出 */
+  .veil { position: fixed; inset: auto 0 0; height: 16vh; pointer-events: none;
+    background: linear-gradient(180deg, rgba(244,241,236,0), rgba(244,241,236,.45) 70%, rgba(244,241,236,.7)); }
+  /* 俯视(?cam=aerial):左侧给文字让出的白雾,地图在标题和输入栏背后退成浅浮雕 */
+  body.aerial .veil { height: auto; position: fixed; inset: 0; pointer-events: none;
+    background:
+      radial-gradient(ellipse 40% 50% at 32% 47%, rgba(244,241,236,.72) 0%, rgba(244,241,236,.45) 50%, rgba(244,241,236,0) 100%),
+      linear-gradient(90deg, rgba(244,241,236,.8) 0%, rgba(244,241,236,.3) 18%, rgba(244,241,236,0) 34%),
+      linear-gradient(180deg, rgba(244,241,236,.5) 0%, rgba(244,241,236,0) 16%, rgba(244,241,236,0) 84%, rgba(244,241,236,.55) 100%); }
+
+  .ui { position: fixed; inset: 0; pointer-events: none; }
+  .ui > * { pointer-events: auto; }
+  .brand { position: absolute; left: clamp(28px, 4.4vw, 76px); top: clamp(40px, 8vh, 84px); }
+  .brand b { display: block; font-size: clamp(22px, 1.9vw, 32px); font-weight: 700; letter-spacing: .01em; }
+  .brand span { display: block; margin-top: 8px; font-size: 12.5px; letter-spacing: .08em; line-height: 1.7; color: var(--sub); }
+  .brand i { display: block; width: 82px; height: 1.5px; margin-top: clamp(28px, 6vh, 56px); background: var(--ink); }
+  .spine { position: absolute; left: clamp(20px, 2.9vw, 48px); top: 7vh; bottom: 30vh; width: 1px; background: var(--line); }
+  .top { position: absolute; right: clamp(24px, 4vw, 70px); top: 34px; display: flex; align-items: center; gap: clamp(20px, 2.6vw, 46px); font-size: 15px; }
+  .top .lang { padding: 5px 14px; border-radius: 999px; background: rgba(255,255,255,.8); font-weight: 600; font-size: 14px; }
+  .rail { position: absolute; left: clamp(28px, 4.4vw, 76px); top: 31vh; width: clamp(140px, 11vw, 190px); list-style: none; margin: 0; padding: 0; }
+  .rail li { position: relative; padding: 14px 0 18px; border-bottom: 1px solid var(--line); font-size: 13px; letter-spacing: .06em; color: var(--mute); }
+  .rail li b { display: block; font-size: 14px; color: var(--ink); margin-bottom: 6px; font-weight: 600; }
+  .rail li::after { content: ""; position: absolute; right: -2px; bottom: -3px; width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
+  .copy { position: absolute; left: clamp(250px, 22.5vw, 400px); top: 24vh; }
+  .copy h1 { margin: 0; font-family: var(--serif); font-weight: 600; font-size: clamp(44px, 4.7vw, 84px); line-height: 1.22; letter-spacing: .01em; }
+  .copy p { margin: clamp(18px, 3vh, 32px) 0 0; font-size: clamp(16px, 1.5vw, 25px); line-height: 1.7; color: var(--sub); letter-spacing: .02em; }
+  .composer { position: absolute; left: clamp(200px, 19.5vw, 350px); top: 57.5vh; width: min(1020px, 61vw); height: 76px;
+    display: flex; align-items: center; gap: 18px; padding: 0 9px 0 28px; border-radius: 999px; background: #fff;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 18px 50px -18px rgba(40,38,30,.25); }
+  .composer svg.s { flex: 0 0 auto; color: #56554F; }
+  .composer input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; font: inherit; font-size: 17px; color: var(--ink); }
+  .composer input::placeholder { color: #8D8B85; }
+  .composer .go { flex: 0 0 auto; width: 60px; height: 60px; border-radius: 50%; display: grid; place-items: center; background: #1F201E; }
+  .aside { position: absolute; right: clamp(24px, 4vw, 70px); top: 22vh; padding-left: 18px; border-left: 1px solid var(--line);
+    font-size: 13px; line-height: 2; letter-spacing: .08em; color: var(--sub); }
+  .foot-l { position: absolute; left: clamp(28px, 4.4vw, 76px); bottom: 5vh; font-size: 13.5px; line-height: 1.9; letter-spacing: .08em; color: var(--sub); }
+  .foot-c { position: absolute; left: 50%; bottom: 4.4vh; transform: translateX(-50%); font-size: 15px; letter-spacing: 1.1em; text-indent: 1.1em; color: var(--sub); white-space: nowrap; }
+  .foot-r { position: absolute; right: clamp(24px, 3.2vw, 56px); bottom: 4.4vh; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; font-size: 15px; letter-spacing: .04em; color: var(--sub); }
+  .foot-r span { display: flex; align-items: center; gap: 12px; }
+  .foot-r i { width: 12px; height: 12px; border: 1.5px solid currentColor; }
+  .foot-r i.f { background: currentColor; box-shadow: inset 0 0 0 2px #fff; }
+  .osm { position: fixed; right: 8px; bottom: 4px; font-size: 10px; color: var(--mute); }
+  .osm a { color: inherit; }
+
+  .hud { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); display: flex; gap: 8px; align-items: center;
+    padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.82); border: 1px solid var(--line);
+    font: 11px/1.4 var(--mono); color: var(--sub); z-index: 5; white-space: nowrap; }
+  .hud button { padding: 2px 8px; border: 1px solid var(--line); border-radius: 5px; background: #fff; font: inherit; }
+  .hud input { width: 70px; }
+  .fallback { position: fixed; inset: 0; display: none; place-items: center; color: var(--mute); font-size: 13px; }
+</style>
+</head>
+<body>
+<canvas id="city" aria-hidden="true"></canvas>
+<div class="veil" aria-hidden="true"></div>
+<div class="fallback" id="fallback">此浏览器不支持 WebGL,城市层不显示(页面其余部分照常可用)</div>
+
+<div class="ui">
+  <div class="spine" aria-hidden="true"></div>
+  <div class="brand"><b>筑明AI</b><span>SYNTHESIZE INFORMATION<br>FOR A BETTER HOME</span><i></i></div>
+  <nav class="top" aria-label="顶栏"><button class="lang" type="button">EN</button><button type="button">假设</button><button type="button">新对话</button></nav>
+  <ol class="rail" aria-hidden="true"><li><b>01</b>SPACE</li><li><b>02</b>LIVING</li><li><b>03</b>COMMUNITY</li><li><b>04</b>ANALYSIS</li></ol>
+  <div class="copy">
+    <h1>更好的家,<br>从一个问题开始。</h1>
+    <p>输入预算、区域或偏好。<br>所有评估数据均基于实测、假设校验与模型测算。</p>
+  </div>
+  <form class="composer" onsubmit="return false">
+    <svg class="s" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.8-4.8"/></svg>
+    <input type="text" placeholder="输入预算、区域或偏好,例如「100万内 · 近车站 · 3房」" aria-label="找房需求">
+    <button class="go" type="submit" aria-label="发送"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg></button>
+  </form>
+  <div class="aside" aria-hidden="true">A<br>BETTER<br>LIVING</div>
+  <div class="foot-l" aria-hidden="true">AI<br>FOR A BETTER HOME</div>
+  <div class="foot-c" aria-hidden="true">家 · 生活 · 可能性</div>
+  <div class="foot-r" aria-hidden="true"><span>NESTWISE <i></i></span><span>MELBOURNE <i class="f"></i></span></div>
+</div>
+<div class="osm">地图数据 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a></div>
+
+<div class="hud">
+  <span>方案 A</span>
+  <button id="h-play" type="button">暂停</button>
+  <label>速度 <input id="h-speed" type="range" min="0" max="6" step="0.1" value="1"></label>
+  <button id="h-ao" type="button">AO:开</button>
+  <button id="h-tilt" type="button">景深:开</button>
+  <button id="h-glow" type="button">光带:开</button>
+  <span id="h-fps">— fps</span>
+  <span id="h-tri"></span>
+</div>
+
+<script src="city.js"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const CITY = window.CITY;
+const qs = new URLSearchParams(location.search);
+const ZOOM = +(qs.get('zoom') || 1);          // >1 拉近
+// 高度夸张系数:这是背景装饰,不是数据展示。墨尔本内城多为平房,按真实高度整片会像一层薄地毯
+const HSCALE = +(qs.get('hs') || 1.5);
+// 默认横视角(低机位、城市压在画面下方、地平线融进白);?cam=aerial 为高位斜俯视
+const SIDE = qs.get('cam') !== 'aerial';
+if (!SIDE) document.body.classList.add('aerial');
+// 横视角:站在 Richmond 南缘朝北看,近景起就是密集街区
+const CAM_Z = qs.has('z') ? +qs.get('z') : 700;
+// 离相机太近的建筑在画面下沿以外,只有高楼会探进来挡住画面 —— 横视角下直接不建
+const NEAR_CULL_Z = SIDE ? CAM_Z - 330 : Infinity;
+
+// ================================================================== 渲染器与场景
+const canvas = document.getElementById('city');
+let renderer;
+try { renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' }); }
+catch (e) { document.getElementById('fallback').style.display = 'grid'; throw e; }
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.NeutralToneMapping;
+renderer.toneMappingExposure = 1.18;
+
+const BG = new THREE.Color('#F4F1EC');
+const scene = new THREE.Scene();
+scene.background = BG;
+
+// 高位斜俯视,朝北看;长焦压缩透视,读起来像一张立起来的地图
+const camera = new THREE.PerspectiveCamera(SIDE ? 30 : 22, 1, 5, 8000);
+const PITCH = THREE.MathUtils.degToRad(48);
+const DIST = 1250 / ZOOM;
+const target = new THREE.Vector3();
+// 横视角:相机高 70 m、微微上仰,地平线在画面约 64% 处,近处地面约 390 m 外(与 v2 相同的构图)。
+// 相机站在 Yarra 河南岸一侧朝北看,近景是河,往后是 Richmond,远处雾化。
+function placeCamera() {
+  if (SIDE) {
+    camera.position.set(target.x, 70, CAM_Z);
+    camera.lookAt(target.x, 95.2, CAM_Z - 300);
+    return;
+  }
+  camera.position.set(target.x, Math.sin(PITCH) * DIST, target.z + Math.cos(PITCH) * DIST);
+  camera.lookAt(target);
+}
+
+// 光:西北方向、约 34° 高度的暖白主光 —— 屋顶最亮、朝北的墙次之、朝南(朝镜头)的墙在阴影里
+const hemi = new THREE.HemisphereLight(0xffffff, 0xf0ebe3, 1.6);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff5ea, 2.7);
+const SUN_DIR = new THREE.Vector3(-.62, .56, -.55).normalize();
+sun.castShadow = true;
+const SM = renderer.capabilities.maxTextureSize >= 8192 ? 8192 : 4096;
+sun.shadow.mapSize.set(SM, SM);
+sun.shadow.bias = -0.00025;
+sun.shadow.normalBias = .35;
+sun.shadow.intensity = .62;   // 影子读得出形体即可,压太深整片发棕
+scene.add(sun, sun.target);
+
+// ================================================================== 城市几何
+const DM = .1;
+const W = CITY.size[0], H = CITY.size[1];
+const toX = v => v * DM, toZ = v => -v * DM;       // 数据 y 向北 → three 的 -z
+
+/** 建筑:按块合并成若干网格,便于视锥裁剪。墙面逐边成四边形,屋顶三角剖分。 */
+function buildBuildings(list, tint) {
+  const CHUNK = 320;
+  const chunks = new Map();
+  let rnd = 12345;
+  const rand = () => ((rnd = (rnd * 16807) % 2147483647) / 2147483647);
+  for (const b of list) {
+    // 中低层按系数放大出起伏;超过 60 m 的部分只保留三分之一,免得真实高塔在横视角里变成劈开标题的巨柱
+    let h = b[0] * DM * HSCALE; if (h > 60) h = 60 + (h - 60) * .33;
+    const n = (b.length - 1) / 2;
+    const xs = new Array(n), zs = new Array(n);
+    let cx = 0, cz = 0;
+    for (let i = 0; i < n; i++) { xs[i] = toX(b[1 + i * 2]); zs[i] = toZ(b[2 + i * 2]); cx += xs[i]; cz += zs[i]; }
+    if (cz / n > NEAR_CULL_Z) continue;
+    const key = Math.floor(cx / n / CHUNK);
+    if (!chunks.has(key)) chunks.set(key, { p: [], nrm: [], c: [] });
+    const ch = chunks.get(key);
+    // 每栋楼亮度有一点点差别(0.94–1.0),整片才不像一张纸
+    const v = .94 + rand() * .06, cr = v * tint[0], cg = v * tint[1], cb = v * tint[2];
+    const push = (x, y, z, nx, ny, nz) => { ch.p.push(x, y, z); ch.nrm.push(nx, ny, nz); ch.c.push(cr, cg, cb); };
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const x0 = xs[i], z0 = zs[i], x1 = xs[j], z1 = zs[j];
+      // 数据环为顺时针(地图坐标);换到 three(z 取反)后外法线 = (dz, -dx)。
+      // 三角形绕序必须与外法线一致,否则外墙被当背面剔掉,只剩对面内墙,屋角出现深色楔形。
+      let nx = z1 - z0, nz = -(x1 - x0);
+      const len = Math.hypot(nx, nz) || 1; nx /= len; nz /= len;
+      push(x0, 0, z0, nx, 0, nz); push(x1, h, z1, nx, 0, nz); push(x1, 0, z1, nx, 0, nz);
+      push(x0, 0, z0, nx, 0, nz); push(x0, h, z0, nx, 0, nz); push(x1, h, z1, nx, 0, nz);
+    }
+    const contour = xs.map((x, i) => new THREE.Vector2(x, zs[i]));
+    const tris = THREE.ShapeUtils.triangulateShape(contour, []);
+    for (const [a, bb, c] of tris) {
+      // 保证屋顶三角形朝上
+      const ux = xs[bb] - xs[a], uz = zs[bb] - zs[a], vx = xs[c] - xs[a], vz = zs[c] - zs[a];
+      const up = (uz * vx - ux * vz) > 0;
+      const order = up ? [a, bb, c] : [a, c, bb];
+      for (const k of order) push(xs[k], h, zs[k], 0, 1, 0);
+    }
+  }
+  const group = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .9, metalness: 0 });
+  let tri = 0;
+  for (const ch of chunks.values()) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(ch.p, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(ch.nrm, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(ch.c, 3));
+    g.computeBoundingSphere();
+    const m = new THREE.Mesh(g, mat);
+    m.castShadow = m.receiveShadow = true;
+    group.add(m);
+    tri += ch.p.length / 9;
+  }
+  group.userData.tri = tri;
+  return group;
+}
+
+/** 折线 → 贴地飘带。aDist 是沿线累计长度,光带着色器用它做流动。 */
+function ribbon(lines, widthOf, y, withDist = false) {
+  const p = [], d = [];
+  for (const line of lines) {
+    const w = widthOf(line) / 2, pts = [];
+    for (let i = line.off; i < line.arr.length; i += 2) pts.push([toX(line.arr[i]), toZ(line.arr[i + 1])]);
+    let acc = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [x0, z0] = pts[i], [x1, z1] = pts[i + 1];
+      const L = Math.hypot(x1 - x0, z1 - z0); if (L < .01) continue;
+      const nx = -(z1 - z0) / L * w, nz = (x1 - x0) / L * w;
+      // 两端各多出半个宽度,折点处的缝被相邻段盖住
+      const ex = (x1 - x0) / L * w * .9, ez = (z1 - z0) / L * w * .9;
+      const a = [x0 - ex + nx, z0 - ez + nz], b = [x0 - ex - nx, z0 - ez - nz], c = [x1 + ex - nx, z1 + ez - nz], e = [x1 + ex + nx, z1 + ez + nz];
+      // 绕序朝上(a→c→b),否则从上方看是背面、整条被剔除
+      p.push(a[0], y, a[1], c[0], y, c[1], b[0], y, b[1], a[0], y, a[1], e[0], y, e[1], c[0], y, c[1]);
+      if (withDist) d.push(acc, acc + L, acc, acc, acc + L, acc + L);
+      acc += L;
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(new Float32Array(p.length).map((_, i) => i % 3 === 1 ? 1 : 0), 3));
+  if (withDist) g.setAttribute('aDist', new THREE.Float32BufferAttribute(d, 1));
+  return g;
+}
+
+function polygons(rings, y) {
+  const p = [];
+  for (const r of rings) {
+    const n = r.length / 2, pts = [];
+    for (let i = 0; i < n; i++) pts.push(new THREE.Vector2(toX(r[i * 2]), toZ(r[i * 2 + 1])));
+    for (const tri of THREE.ShapeUtils.triangulateShape(pts, [])) {
+      const [a, b, c] = tri.map(k => pts[k]);
+      const up = ((b.y - a.y) * (c.x - a.x) - (b.x - a.x) * (c.y - a.y)) > 0;
+      for (const v of up ? [a, b, c] : [a, c, b]) p.push(v.x, y, v.y);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+  g.computeVertexNormals();
+  return g;
+}
+
+const t0 = performance.now();
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(W + 6000, H + 6000), new THREE.MeshStandardMaterial({ color: '#EEEBE5', roughness: 1 }));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+
+const parks = new THREE.Mesh(polygons(CITY.p, .03), new THREE.MeshStandardMaterial({ color: '#F2F0EA', roughness: 1 }));
+parks.receiveShadow = true; scene.add(parks);
+
+const ROAD_W = [18, 12, 7.5];
+const roadLines = CITY.r.map(a => ({ arr: a, off: 1, cls: a[0] }));
+const roads = new THREE.Mesh(ribbon(roadLines, l => ROAD_W[l.cls], .06), new THREE.MeshStandardMaterial({ color: '#FAF9F6', roughness: 1 }));
+roads.receiveShadow = true; scene.add(roads);
+
+const rails = new THREE.Mesh(ribbon(CITY.rl.map(a => ({ arr: a, off: 0 })), () => 7, .05), new THREE.MeshStandardMaterial({ color: '#DEDAD2', roughness: 1 }));
+rails.receiveShadow = true; scene.add(rails);
+
+const river = new THREE.Mesh(ribbon(CITY.w.map(a => ({ arr: a, off: 0 })), () => 64, .02),
+  new THREE.MeshStandardMaterial({ color: '#C4CCCE', roughness: .45, metalness: .05 }));
+river.receiveShadow = true; scene.add(river);
+
+const real = buildBuildings(CITY.b, [1, .995, .985]);
+const filled = buildBuildings(CITY.bf, [.99, .985, .975]);
+scene.add(real, filled);
+
+// 主干道光带:暖金色,沿路缓慢流动;强度刻意克制,靠泛光出光晕
+const glowUniforms = { uTime: { value: 0 } };
+const glowMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3.0, 1.95, .9), transparent: true, depthWrite: false });
+glowMat.onBeforeCompile = sh => {
+  sh.uniforms.uTime = glowUniforms.uTime;
+  sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float aDist; varying float vDist;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvDist = aDist;');
+  sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uTime; varying float vDist;')
+    .replace('#include <color_fragment>', `#include <color_fragment>
+      float flow = .5 + .5 * sin(vDist * .018 - uTime * 1.3);
+      diffuseColor.a *= .38 + .62 * smoothstep(.35, 1.0, flow);`);
+};
+const glowLines = roadLines.filter(l => l.cls === 0 || (l.cls === 1 && l.arr.length > 24));
+const glow = new THREE.Mesh(ribbon(glowLines, l => l.cls === 0 ? 4.5 : 3, .3, true), glowMat);
+scene.add(glow);
+
+// 公园里的树:成团的白色树冠,平滑法线
+function treeGeo() {
+  const parts = [[0, 4.2, 0, 2.6], [1.6, 3.4, .8, 1.9], [-1.4, 3.7, -.8, 1.8], [.3, 5.6, -.4, 1.5]]
+    .map(([x, y, z, r]) => { const g = new THREE.IcosahedronGeometry(r, 1); g.translate(x, y, z); g.deleteAttribute('uv'); g.deleteAttribute('normal'); return g; });
+  const trunk = new THREE.CylinderGeometry(.25, .35, 2.8, 5, 1).translate(0, 1.4, 0).toNonIndexed();
+  trunk.deleteAttribute('uv'); trunk.deleteAttribute('normal');
+  const g = mergeVertices(mergeGeometries([...parts, trunk]), .01);
+  g.computeVertexNormals();
+  return g;
+}
+const TREES = [];
+{
+  let s = 777; const r = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  for (const ring of CITY.p) {
+    const n = ring.length / 2, xs = [], zs = [];
+    let minx = 1e9, maxx = -1e9, minz = 1e9, maxz = -1e9, area = 0;
+    for (let i = 0; i < n; i++) { xs.push(toX(ring[i * 2])); zs.push(toZ(ring[i * 2 + 1])); }
+    for (let i = 0; i < n; i++) {
+      minx = Math.min(minx, xs[i]); maxx = Math.max(maxx, xs[i]); minz = Math.min(minz, zs[i]); maxz = Math.max(maxz, zs[i]);
+      const j = (i + 1) % n; area += xs[i] * zs[j] - xs[j] * zs[i];
+    }
+    // 稀疏、成团:散得太匀会像一地白点
+    const count = Math.min(90, Math.abs(area / 2) / 1400);
+    for (let k = 0, tries = 0; k < count && tries < count * 4; tries++) {
+      const x = minx + r() * (maxx - minx), z = minz + r() * (maxz - minz);
+      let inside = false;
+      for (let i = 0, j = n - 1; i < n; j = i++) {
+        if ((zs[i] > z) !== (zs[j] > z) && x < (xs[j] - xs[i]) * (z - zs[i]) / (zs[j] - zs[i]) + xs[i]) inside = !inside;
+      }
+      if (inside) { TREES.push([x, z, 1.3 + r() * .8]); k++; }
+    }
+  }
+}
+const trees = new THREE.InstancedMesh(treeGeo(), new THREE.MeshStandardMaterial({ color: '#FFFFFF', roughness: .95 }), TREES.length);
+{
+  const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), V = new THREE.Vector3(), S = new THREE.Vector3();
+  TREES.forEach(([x, z, s], i) => { Q.setFromAxisAngle(V.set(0, 1, 0), (x * 7.1 + z) % 6.28); M.compose(V.set(x, 0, z), Q, S.setScalar(s)); trees.setMatrixAt(i, M); });
+}
+trees.castShadow = trees.receiveShadow = true;
+scene.add(trees);
+const buildMs = Math.round(performance.now() - t0);
+
+// ================================================================== 阴影覆盖:整片区域一张固定阴影图(不随镜头移动,平移时不闪)
+{
+  const c = sun.shadow.camera;
+  const span = Math.max(W, H) / 2 + 200;
+  sun.position.copy(SUN_DIR).multiplyScalar(4000);
+  sun.target.position.set(0, 0, 0);
+  Object.assign(c, { left: -span, right: span, top: span * .62, bottom: -span * .62, near: 100, far: 9000 });
+  c.updateProjectionMatrix();
+}
+
+// ================================================================== 后期
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+composer.addPass(new RenderPass(scene, camera));
+const gtao = new GTAOPass(scene, camera, 1, 1);
+gtao.updateGtaoMaterial({ radius: 9, distanceExponent: 1.4, thickness: 6, scale: 1.2, samples: 16, distanceFallOff: 1, screenSpaceRadius: false });
+gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
+composer.addPass(gtao);
+
+const haze = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, tDepth: { value: null }, uBg: { value: new THREE.Vector3(BG.r, BG.g, BG.b) },
+    uNear: { value: camera.near }, uFar: { value: camera.far }, uStart: { value: SIDE ? 800 : DIST * 1.18 }, uEnd: { value: SIDE ? 1900 : DIST * 2.4 }, uFade: { value: 0 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `
+    #include <packing>
+    uniform sampler2D tDiffuse; uniform sampler2D tDepth; uniform vec3 uBg;
+    uniform float uNear; uniform float uFar; uniform float uStart; uniform float uEnd; uniform float uFade;
+    varying vec2 vUv;
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      float d = texture2D(tDepth, vUv).x;
+      float dist = -perspectiveDepthToViewZ(d, uNear, uFar);
+      float f = d >= .9999 ? 1.0 : smoothstep(uStart, uEnd, dist);
+      gl_FragColor = vec4(mix(c.rgb, uBg, max(f * .9, uFade)), c.a);
+    }`,
+});
+haze.uniforms.tDepth.value = gtao.depthTexture;       // ShaderPass 会克隆 uniforms,深度贴图须构造后再挂
+composer.addPass(haze);
+
+const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), .7, .8, 1.05);
+composer.addPass(bloom);
+
+// 景深:画面上下沿逐渐虚化(移轴感),中间一条清晰带
+const tilt = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, uRes: { value: new THREE.Vector2(1, 1) }, uFocus: { value: .5 }, uBand: { value: .2 }, uMax: { value: 2.4 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform vec2 uRes; uniform float uFocus; uniform float uBand; uniform float uMax;
+    varying vec2 vUv;
+    void main() {
+      float amt = smoothstep(uBand, .5, abs(vUv.y - uFocus)) * uMax;
+      if (amt < .05) { gl_FragColor = texture2D(tDiffuse, vUv); return; }
+      vec4 acc = vec4(0.0); float wsum = 0.0;
+      for (int i = -3; i <= 3; i++) for (int j = -3; j <= 3; j++) {
+        vec2 o = vec2(float(i), float(j));
+        float w = exp(-dot(o, o) / 8.0);
+        acc += texture2D(tDiffuse, vUv + o * amt / uRes) * w; wsum += w;
+      }
+      gl_FragColor = acc / wsum;
+    }`,
+});
+composer.addPass(tilt);
+composer.addPass(new OutputPass());
+
+// ================================================================== 尺寸
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  composer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  tilt.uniforms.uRes.value.set(w * renderer.getPixelRatio(), h * renderer.getPixelRatio());
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ================================================================== 运动:镜头向西移 → 画面上城市由西向东走
+const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+const state = { speed: 1, playing: !reduced.matches, t: 0, last: performance.now(), frames: 0, fpsT: performance.now(), fading: 0 };
+const BASE_SPEED = SIDE ? 3.5 : 7;         // m/s;横视角离得近,同样速度在屏幕上快一倍
+// 起点在东侧 Yarra 河湾,一路向西经过 Richmond 主路、Cremorne 与 CBD 东缘的塔楼
+// 横视角只走 Richmond 最密的约 2.3 km(再往西是 MCG 与公园,近景会空);俯视走全程
+const X_START = SIDE ? 1000 : 900, X_END = SIDE ? -900 : -W / 2 + 650;
+target.set(qs.has('x') ? +qs.get('x') : X_START, 0, SIDE ? 0 : (qs.has('z') ? +qs.get('z') : 60));
+placeCamera();
+
+function advance(dt) {
+  state.t += dt;
+  glowUniforms.uTime.value = state.t;
+  if (state.fading) {                       // 走到尽头:淡出 → 回起点 → 淡入
+    state.fading += dt;
+    const f = state.fading;
+    haze.uniforms.uFade.value = f < 1.2 ? f / 1.2 : Math.max(0, 1 - (f - 1.2) / 1.2);
+    if (f >= 1.2 && target.x < X_START - 1) { target.x = X_START; placeCamera(); }
+    if (f >= 2.4) { state.fading = 0; haze.uniforms.uFade.value = 0; }
+    return;
+  }
+  target.x -= BASE_SPEED * state.speed * dt;
+  if (target.x <= X_END) state.fading = 1e-6;
+  placeCamera();
+}
+
+function draw() { composer.render(); }
+
+function tick(now) {
+  const dt = Math.min(.05, (now - state.last) / 1000);
+  state.last = now;
+  if (state.playing && !document.hidden) advance(dt);
+  draw();
+  state.frames++;
+  if (now - state.fpsT > 1000) {
+    document.getElementById('h-fps').textContent = Math.round(state.frames * 1000 / (now - state.fpsT)) + ' fps';
+    document.getElementById('h-tri').textContent = (renderer.info.render.triangles / 1e6).toFixed(2) + 'M tri';
+    state.frames = 0; state.fpsT = now;
+  }
+}
+draw();
+renderer.setAnimationLoop(tick);
+
+window.__city = {
+  renderAt(seconds) { advance(seconds); draw(); return { x: target.x, fade: haze.uniforms.uFade.value }; },
+  info: () => ({ buildings: CITY.b.length, filled: CITY.bf.length, trees: TREES.length, buildTris: real.userData.tri + filled.userData.tri,
+    buildMs, shadowMap: SM, glowSegments: glowLines.length }),
+};
+
+// ================================================================== 调试面板
+const $ = id => document.getElementById(id);
+$('h-play').textContent = state.playing ? '暂停' : '播放';
+$('h-play').onclick = () => { state.playing = !state.playing; $('h-play').textContent = state.playing ? '暂停' : '播放'; };
+$('h-speed').oninput = e => { state.speed = +e.target.value; };
+$('h-ao').onclick = () => { gtao.enabled = !gtao.enabled; $('h-ao').textContent = 'AO:' + (gtao.enabled ? '开' : '关'); };
+$('h-tilt').onclick = () => { tilt.enabled = !tilt.enabled; $('h-tilt').textContent = '景深:' + (tilt.enabled ? '开' : '关'); };
+$('h-glow').onclick = () => { glow.visible = !glow.visible; bloom.enabled = glow.visible; $('h-glow').textContent = '光带:' + (glow.visible ? '开' : '关'); };
+if (qs.get('ao') === '0') gtao.enabled = false;
+// 移轴景深只适合俯视;横视角下上半是天空,虚化只会把地平线弄脏
+if (qs.get('tilt') === '0' || (SIDE && qs.get('tilt') !== '1')) tilt.enabled = false;
+$('h-tilt').textContent = '景深:' + (tilt.enabled ? '开' : '关');
+</script>
+</body>
+</html>

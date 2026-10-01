@@ -79,18 +79,19 @@ def _valuation_line(m: dict) -> str:
     if m.get("valuation_is_stub"):
         return f"   估值 {_money(m.get('predicted_price'))}  ⚠️ 占位值,非真实模型"
 
-    lo, hi = (m.get("valuation_range") or [None, None])
-    band = f"({_money(lo)} ~ {_money(hi)})" if isinstance(lo, int) else ""
+    lo, hi = (m.get("valuation_interval") or [None, None])
+    level = m.get("valuation_interval_level")
+    band = f"({level:.0%} 把握区间 {_money(lo)} ~ {_money(hi)})" if isinstance(lo, int) and level else ""
     line = f"   模型估值 {_money(m.get('predicted_price'))} {band}".rstrip()
 
     gap = m.get("predicted_gap")
-    err = m.get("valuation_error_pct")
-    if isinstance(gap, float) and isinstance(err, float):
-        # 模型典型误差约 9%,差距没超过它就是噪声,不许说成"低估/高估"。
-        if abs(gap) <= err + 0.01:
-            line += "  · 与售价基本相符"
+    position = m.get("valuation_position")
+    if isinstance(gap, float) and position:
+        # 售价落在区间内就是正常波动,不许说成"低估/高估"。
+        if position == "within":
+            line += "  · 售价在区间内,与估值基本相符"
         else:
-            line += f"  · 比售价{'高' if gap > 0 else '低'} {abs(gap) * 100:.0f}%"
+            line += f"  · 估值比售价{'高' if gap > 0 else '低'} {abs(gap) * 100:.0f}%,售价在区间之外"
     return line
 
 
@@ -175,11 +176,12 @@ def _render(result: dict) -> str:
     lines.append("~ 基于假设,非实测数据:")
     for line in assumptions.describe():
         lines.append(f"   · {line}")
-    errs = {m.get("property_type"): m.get("valuation_error_pct") for m in metrics}
-    for ptype, err in sorted(errs.items(), key=lambda kv: str(kv[0])):
-        if isinstance(err, float):
+    covs = {m.get("property_type"): (m.get("valuation_interval_level"), m.get("valuation_interval_coverage"))
+            for m in metrics}
+    for ptype, (level, cov) in sorted(covs.items(), key=lambda kv: str(kv[0])):
+        if isinstance(level, float) and isinstance(cov, float):
             zh = _PROPERTY_TYPE_ZH.get(ptype, ptype)
-            lines.append(f"   · {zh}估值典型误差 ±{err * 100:.1f}%,区间内约含一半房源")
+            lines.append(f"   · {zh}估值区间标称 {level:.0%} 把握,在模型没见过的成交上实测覆盖 {cov:.0%}")
     lines.append("")
     lines.append("说明:" + (result.get("answer") or "").strip())
     return "\n".join(lines)

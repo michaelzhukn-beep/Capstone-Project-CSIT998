@@ -1,131 +1,152 @@
-# AI-Driven Real Estate Assistant — Data & Search (Member B)
+# Nestwise (筑明AI) — AI Melbourne Property Assistant
 
-> **Working on this repo (human or AI agent)? Start with [`AGENTS.md`](./AGENTS.md)**
-> and [`docs/PROJECT_STATE.md`](./docs/PROJECT_STATE.md). This repo is worked on by
-> more than one AI agent, and those files — not any chat history — are the shared
-> project memory.
->
-> Note: the sections below describe Member B's original data/search track. The
-> assistant itself now lives in `app/`; see `docs/ARCHITECTURE.md`.
+CSIT998 capstone project. Ask for a home in plain English or Chinese —
+*"3-bedroom house under $1M near a train station, somewhere quiet"* — and Nestwise
+searches 20,800 real Melbourne sales records, explains its choices, values each property
+with a trained model, and works out stamp duty, rental yield and ROI.
 
-This repo is Member B's track of a 3-person AI capstone project (see the team's shared `contracts.md` for the full interface contract across all tracks — not included in this repo, ask the team for the current copy). Member B owns three things:
+**The core idea:** every number on screen says where it came from. Each figure is
+one of three kinds, and the wording and styling keep them apart:
 
-1. The property dataset — sourced, cleaned, and enriched with real rental data
-2. The `properties` table in Postgres + pgvector
-3. `search_properties()` — hybrid SQL-filter + vector-similarity search
+| Kind | Examples | How it is shown |
+|---|---|---|
+| **Measured / statutory** | sale price, distances, Victorian stamp duty (Duties Act 2000 s 28) | plain |
+| **Assumption-based** | NOI, cap rate, ROI (they depend on an editable operating-cost rate) | marked as an assumption, editable in place |
+| **Model-predicted** | estimated value and its 80% range | marked as a model estimate |
 
-For the full story behind every decision (dataset choice, how missing `annual_rent`/`description` fields were handled, the embedding model comparison, the row-drop decision) see **[`Member B's tasks.md`](./Member%20B's%20tasks.md)**. This README is the "how do I run it" reference; that file is the "why did we do it this way" one.
+The LLM never invents listings or numbers. It turns your sentence into filters and
+writes the explanation. All the data and every calculation come from the database and
+plain Python formulas. If nothing matches, that path skips the LLM entirely.
 
-## Project layout
+➡️ **Full feature list:** [`docs/en/FEATURES.md`](docs/en/FEATURES.md)
 
-```
-data/         raw + processed CSVs/XLSX (mostly gitignored — see "Getting the data" below)
-db/           docker-compose.yml (Postgres + pgvector) and schema.sql
-pipeline/     one-off scripts that build the dataset (run once, in order — see below)
-search.py         the actual deliverable — search_properties()
-test_search.py    its test suite
-requirements.txt
-```
+---
 
-## Setup
+## Quick start (about 15 minutes, mostly downloads)
 
-Prerequisites: Python 3.13, Docker Desktop.
+### 0. Prerequisites
+
+| Tool | Version | Notes |
+|---|---|---|
+| **Python** | 3.12 – 3.14 | Windows: tick *"Add Python to PATH"* when installing |
+| **Docker Desktop** | any recent | runs the Postgres + pgvector database |
+| **Git** | any | or use GitHub's *Code → Download ZIP* |
+| **An LLM API key** | — | DeepSeek, OpenAI, Qwen, OpenRouter… or a free local model via Ollama. See [Configuration](docs/en/CONFIGURATION.md) |
+
+You need about 3 GB of free disk space (Python packages, the embedding model and the database).
+
+### 1. Get the code
 
 ```bash
+git clone <this-repo-url>
+cd Capstone-Project-CSIT998
+```
+
+### 2. Install the Python packages
+
+```bash
+python -m venv .venv
+# Windows:            .venv\Scripts\activate
+# macOS / Linux:      source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 1. Start the database
+### 3. Configure your LLM key
 
 ```bash
-cd db
-docker compose up -d
-docker exec -i capstone_postgres psql -U capstone -d capstone < schema.sql
-cd ..
+# Windows:  copy .env.example .env
+# macOS/Linux:  cp .env.example .env
 ```
 
-(If you have a local `psql` client installed, `psql postgresql://capstone:capstone@localhost:15432/capstone -f schema.sql` works too — the `docker exec` version above doesn't require anything installed beyond Docker itself.)
+Open `.env` and paste your key into `LLM_API_KEY=`. The file defaults to DeepSeek.
+To use another provider, uncomment its block instead. Switching provider only means
+editing `.env`; no code changes. See **[docs/en/CONFIGURATION.md](docs/en/CONFIGURATION.md)**.
 
-This starts Postgres 16 + pgvector in a container (`capstone_postgres`, host port 15432 -> container 5432, credentials `capstone`/`capstone`/`capstone` — local dev only) and creates the `properties` table with a 768-dim vector column and HNSW cosine index.
+### 4. Start the database and load the data
 
-### 2. Getting the data
-
-Most of `data/` is gitignored (large, and fully reproducible from the pipeline scripts) except `moving_annual_rent_by_suburb.xlsx`, which is committed since it's a small, dated government snapshot report you'd otherwise need to re-source correctly. You'll need to separately download:
-
-- **Melbourne Housing Market** dataset from Kaggle — [anthonypino/melbourne-housing-market](https://www.kaggle.com/datasets/anthonypino/melbourne-housing-market). Download `Melbourne_housing_FULL.csv` and place it in `data/` — this is the one the pipeline actually builds on. `MELBOURNE_HOUSE_PRICES_LESS.csv` is only needed if you also want to run the EDA script's FULL-vs-LESS comparison (optional, see step 3) — grab it from the same Kaggle page if so.
-
-### 3. Build the dataset
-
-Run in order from the project root:
+Start **Docker Desktop** first, then:
 
 ```bash
-python3 pipeline/eda_melbourne_housing.py          # optional — sanity checks only, doesn't produce pipeline output
-python3 pipeline/match_suburb_precinct.py          # suburb -> DFFH rent precinct/region mapping
-python3 pipeline/aggregate_rent_benchmarks.py      # builds the rent lookup table
-python3 pipeline/join_annual_rent.py               # adds annual_rent to every property
-python3 pipeline/build_description.py              # adds description, drops rows that can't meet the contract's required fields
-python3 pipeline/load_properties.py                # embeds every description and loads everything into Postgres
+docker compose -f db/docker-compose.yml up -d
+python db/setup_db.py
 ```
 
-`load_properties.py` downloads the `nomic-embed-text-v1.5` embedding model (~500MB, first run only, then cached locally) and auto-uses your GPU if available (Apple Silicon MPS or CUDA, falls back to CPU otherwise).
+`setup_db.py` restores all 20,800 properties, with their search embeddings, from
+`db/seed/properties.dump` in about a minute. You don't need a Kaggle download or the data
+pipeline. It is safe to run again.
 
-### 4. Verify
+### 5. Run it
 
 ```bash
-python3 test_search.py
+python serve.py
 ```
 
-Should print `All tests passed.` — checks the returned record shape matches the contract exactly, hard filters are never violated, impossible constraints return `[]` rather than erroring, and that semantically different queries actually produce different rankings (i.e. the vector search is doing something, not just returning the same top results regardless of query).
+The first start downloads the embedding model (~550 MB, once) and loads the valuation model
+and geographic data (~20 s). The browser then opens at **http://localhost:8000**.
 
-## Using `search_properties()`
-
-```python
-from search import search_properties
-
-results = search_properties(
-    semantic_query="quiet apartment close to the city",
-    max_price=800_000,
-    bedrooms=2,
-    property_type="apartment",
-    limit=10,
-)
-```
-
-Returns a list of dicts shaped exactly per the shared contract (`id`, `suburb`, `address`, `property_type`, `price`, `bedrooms`, `bathrooms`, `car_spaces`, `land_size`, `building_area`, `distance_cbd`, `latitude`, `longitude`, `annual_rent`, `description` — never `embedding`). Hard constraints (`max_price`, `min_price`, `bedrooms`, `bathrooms`, `property_type`, `suburb`) are enforced as exact SQL filters — a property violating any of them never appears, even ranked low. `semantic_query` is the only thing ranked by meaning (vector cosine similarity), never matched as literal text.
-
-## Web interface
-
-Double-click `start-web.bat` in the project root, or:
+On Windows you can just double-click **`start-web.bat`**.
 
 ```bash
-pip install -r requirements.txt
-python serve.py            # http://localhost:8000, opens the browser when ready
-python serve.py --lan      # also reachable from a phone on the same Wi-Fi
+python serve.py --port=8010    # different port
+python serve.py --lan          # also reachable from phones on the same Wi-Fi
+python serve.py --no-open      # don't open a browser
+python run.py                  # command-line version (same engine)
+python share.py                # public link via Cloudflare Quick Tunnel (needs cloudflared)
 ```
 
-To let someone outside your network try it, double-click `share-web.bat`, or:
+### 6. Check everything works (optional)
 
 ```bash
-python share.py            # starts the server if needed, opens a Cloudflare
-                           # Quick Tunnel, prints and copies the public URL
-python share.py --attach   # server already running; just open the tunnel
+python tests/test_formulas.py     # no database or LLM needed
+python tests/test_api.py          # needs the database; no LLM calls
 ```
 
-The tunnel has **no password**, dies when you close the window, and gets a new
-random address every time. It needs `cloudflared` on PATH
-(`winget install --id Cloudflare.cloudflared`); the script never downloads it
-for you, it only tells you the command.
+See [docs/en/DEVELOPMENT.md](docs/en/DEVELOPMENT.md#tests) for the full test list.
 
-`start-web.bat` must stay pure ASCII with CRLF line endings -- cmd.exe reads
-.bat files in the OEM code page and will try to execute mis-decoded UTF-8
-comment fragments as commands. The reason is documented inside the file.
+---
 
-No npm, no build step -- the frontend is three static files under `app/web/`
-served by FastAPI. The command-line version (`python run.py`) still works and
-shares the same graph. See `NOTES_FOR_SUPERVISOR.md` for the design rationale.
+## Documentation
+
+| Read this | For |
+|---|---|
+| [`docs/en/FEATURES.md`](docs/en/FEATURES.md) | Everything the app can do, screen by screen |
+| [`docs/en/CONFIGURATION.md`](docs/en/CONFIGURATION.md) | Switching the LLM provider / key, all `.env` settings, assumptions |
+| [`docs/en/DEVELOPMENT.md`](docs/en/DEVELOPMENT.md) | Project layout, how a request flows, HTTP API, tests, rebuilding the data |
+| [`docs/en/TROUBLESHOOTING.md`](docs/en/TROUBLESHOOTING.md) | Common setup problems and fixes |
+| [`AGENTS.md`](AGENTS.md) | Rules for anyone (human or AI agent) changing the code |
+| `docs/*.md` (Chinese) | Project state, architecture, design decisions; the team's engineering record |
+| `NOTES_FOR_SUPERVISOR.md` (Chinese) | Long-form rationale, measurements and dead ends |
+| [`Member B's tasks.md`](Member%20B's%20tasks.md) | How the dataset was sourced and cleaned |
+
+## Tech stack
+
+Python · FastAPI · LangGraph · PostgreSQL 16 + pgvector · sentence-transformers
+(`nomic-embed-text-v1.5`) · XGBoost · Shapely · vanilla JS frontend (no build step) ·
+Leaflet + MapLibre GL · three.js (homepage scene, baked in Blender/Cycles).
+
+## Data sources and licences
+
+| Data | Source | Licence |
+|---|---|---|
+| Property sales 2016–2018 | [Melbourne Housing Market, Kaggle (Tony Pino)](https://www.kaggle.com/datasets/anthonypino/melbourne-housing-market) | CC BY-NC-SA 4.0 |
+| Rents | DFFH Rental Report, moving annual rent by suburb | CC BY 4.0 |
+| Amenities, roads, rail, land use | © OpenStreetMap contributors | ODbL |
+| Planning zones and overlays | Vicmap Planning (DataVic) | CC BY 4.0 |
+| School catchment zones | Victorian Department of Education (DataVic) | CC BY 4.0 |
+| Crime rates by LGA | Crime Statistics Agency Victoria | CC BY 4.0 |
+| Map tiles | OpenFreeMap / OpenMapTiles (fallback: OpenStreetMap tiles) | ODbL |
+| Stamp duty | *Duties Act 2000* (Vic) s 28(1) | legislation |
+
+`db/seed/properties.dump` is derived from the Kaggle dataset and shared under the
+same CC BY-NC-SA 4.0 terms: non-commercial use, with attribution.
 
 ## Known limitations
 
-- **20,800 of the original 34,857 rows** made it into the final dataset. ~8,225 rows were missing `bedrooms`/`bathrooms` together (a distinct incomplete-listing batch) and ~5,831 more were missing `price` — both required fields with no honest fallback, so those rows were dropped rather than estimated. See `Member B's tasks.md` for the full reasoning.
-- `description` text is generated from structured fields only (bedrooms, size, location, era) — it cannot express subjective/lifestyle qualities like "quiet" or "family-friendly" since no data supports those claims. Semantic search will do well on physical/locational queries and poorly on lifestyle-flavored ones. This is a deliberate tradeoff, not a bug — see the description-generation discussion in the tasks notes.
-- `annual_rent` is sourced from real DFFH (Victorian Government) rental data for ~100% of rows via suburb/region matching; a documented gross-yield fallback exists for edge cases but was never actually triggered on this dataset.
+- **Distances are straight-line.** There is no road network, so walking or driving times are reported as unsupported.
+- **Sales data is from 2016–2018**, and stamp duty uses the rate table in force then.
+- Operating costs are an **assumption** (default 28% of rent); every result built on them is labelled as such.
+- Conversations live in memory and are lost when the server restarts. The investment
+  assumptions are shared by everyone using the same server.
+- The 3D homepage scene needs WebGL and a screen at least 900px wide. Otherwise it falls back to an illustrated city.
+
+Current open issues are tracked in `docs/PROJECT_STATE.md` (*Known Issues*) and `docs/TODO.md`.

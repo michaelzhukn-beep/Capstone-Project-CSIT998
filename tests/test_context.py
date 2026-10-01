@@ -46,7 +46,8 @@ assert collect_evidence(-37.8, None) == {}
 assert ev_outer["major_road_m"] > ev_cbd["major_road_m"] * 5
 assert ev_outer["railway_m"] > ev_cbd["railway_m"] * 5
 # 市中心的夜间场所和商店必须远多于远郊
-assert ev_cbd["nightlife_300m"] > 20 and ev_outer["nightlife_300m"] == 0
+# (夜间场所只数酒吧/夜店/pub,不含餐厅快餐 —— 审计 BUG-09;Flinders St 一带实测 18 家)
+assert ev_cbd["nightlife_300m"] > 10 and ev_outer["nightlife_300m"] == 0
 assert ev_cbd["shop_800m"] > 100 and ev_outer["shop_800m"] < 5
 
 # ---------------------------------------------------------------- 评分对不对得上现实
@@ -92,6 +93,39 @@ assert corr < -0.6, f"安静与热闹的相关系数是 {corr:.3f},两者应当�
 # 但也不该完全是同一个数取反,否则分开两个属性就没意义
 assert corr > -0.995, f"相关系数 {corr:.3f},安静和热闹几乎就是同一个指标"
 assert q.std() > 10, "安静分几乎没有区分度"
+
+# ---------------------------------------------------------------- 审计回归
+
+from app.amenities import nearby  # noqa: E402
+from app.amenities.context import _size_m2  # noqa: E402
+
+# BUG-06:明显录错的建筑面积(4 房独栋 1 ㎡,是把卧室数填进了面积列)不当真,退回地块面积
+assert _size_m2({"building_area": 1.0, "land_size": 319.0, "bedrooms": 4}) == 319.0
+assert _size_m2({"building_area": 4.0, "land_size": None, "bedrooms": 4}) is None
+assert _size_m2({"building_area": 55.0, "land_size": 0.0, "bedrooms": 1}) == 55.0     # 一房小公寓是真的
+assert _size_m2({"building_area": 120.0, "land_size": 400.0, "bedrooms": 3}) == 120.0
+assert _size_m2({"building_area": 15.0, "land_size": 15.0, "bedrooms": 3}) is None     # 两列都录错就不打分
+
+# BUG-05:距 CBD 按坐标算,不用数据集按区给的值(Werribee 全区写 14.7 km,实际约 28 km)
+werribee = (-37.8990, 144.6610)
+assert 25 < nearby.distance_to_cbd_km(*werribee, fallback=14.7) < 32
+assert nearby.distance_to_cbd_km(None, None, fallback=14.7) == 14.7
+assert nearby.distance_to_cbd_km(None, None) is None
+ev_w = collect_evidence(*werribee, None, {"distance_cbd": 14.7})
+assert ev_w["distance_cbd_km"] > 25, "证据里的距 CBD 仍在用数据集的错值"
+
+# BUG-01:公园按边界量距,不按中心点。249 Punt Rd 紧挨 Yarra Park,原来按中心点报 301 米,原始轮廓实测 39 米
+punt = nearby.nearest(-37.8201, 144.9898, "park")
+assert punt["distance_m"] < 60 and punt["name"] == "Yarra Park", punt
+# 按名字找到的公园,距离也量到它的边界(边界点按 osm_id 找回来),不是量到中心点
+albert = nearby.find_place("Albert Park", "park")
+edge_lat, edge_lon = nearby._load()["edges"][albert[0]["osm_id"]][0]
+assert nearby.distance_to_place(edge_lat, edge_lon, albert)["distance_m"] == 0
+assert nearby.distance_between(edge_lat, edge_lon, albert[0]["latitude"], albert[0]["longitude"]) > 300
+
+# BUG-08:三级路、电车线是独立证据,并计入安静分
+assert {"tertiary_road_m", "tram_line_m"} <= set(ATTRIBUTES["quiet"]["parts"])
+assert "tertiary_road_m" in ev_cbd and "tram_line_m" in ev_cbd
 
 # ---------------------------------------------------------------- 证据描述
 

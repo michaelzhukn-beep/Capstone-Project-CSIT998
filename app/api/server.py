@@ -43,7 +43,10 @@ params 当作 parse_intent 的输出写进会话状态,再 stream(None) 从 sear
 
 import asyncio
 import json
+import math
+import sys
 import threading
+from copy import deepcopy
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -51,6 +54,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from langgraph.types import Overwrite
 
 from app.amenities import context, nearby, planning, registry, suburb_stats, zones
 from app.analytics import assumptions
@@ -58,6 +62,7 @@ from app.analytics.valuation import warm_up as valuation_warm_up
 from app import i18n
 from app.analytics.formulas import investment_metrics
 from app.orchestration import graph as g
+from app.auth import favorites as auth_favorites, routes as auth_routes, store as auth_store
 from app.orchestration.graph import GRAPH, new_session
 from app.search.search import _get_model
 
@@ -92,14 +97,26 @@ def warm_up() -> dict:
     return meta
 
 
+def _say(text: str) -> None:
+    """启动提示。GBK 控制台(中文 Windows 的 cmd、Agent 的 Bash 子进程)编码不了「R²」之类的字符,
+    直接 print 会抛 UnicodeEncodeError 打死 lifespan —— 提示是给人看的,不能拿服务陪葬。
+    serve.py 已把 stdout 改成 UTF-8;这里兜的是 uvicorn 直起、TestClient 等其他入口。"""
+    try:
+        print(text, flush=True)
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(text.encode(enc, errors="replace").decode(enc), flush=True)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    print("正在加载模型与地理数据(约 20 秒)……", flush=True)
+    _say("正在加载模型与地理数据(约 20 秒)……")
+    await asyncio.to_thread(auth_store.ensure_schema)      # 账号表:已有数据库不会重跑 db/schema.sql,这里幂等建一次
     meta = await asyncio.to_thread(warm_up)
     m = meta["metrics"]
     # 这里不印网址 —— 端口是 serve.py 决定的(可以 --port= 改),
     # 在这里硬编码 8000 会在换端口时给出一个错的地址。
-    print(f"就绪:估值模型 R² {m['r2']:.3f} · 可以开始提问", flush=True)
+    _say(f"就绪:估值模型 R² {m['r2']:.3f} · 可以开始提问")
     yield
 
 
@@ -121,6 +138,8 @@ class _RevalidatingStatic(StaticFiles):
 
 
 app = FastAPI(title="筑明AI", lifespan=_lifespan)
+app.include_router(auth_routes.router)                     # /api/auth/*:注册、登录、登出、当前用户(登录可选)
+app.include_router(auth_favorites.router)                  # /api/favorites:收藏(需登录)
 app.mount("/static", _RevalidatingStatic(directory=str(WEB)), name="static")
 
 
@@ -173,7 +192,38 @@ def _sse(event: str, data) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
 
-async def _run(thread_id: str, inputs, config, lang: str = "zh"):
+# ---- done 事件里的「本轮假设」---------------------------------------------------------------
+# 假设是进程级的,/api/assumptions 可以在一轮进行中把它改掉。done 事件必须描述**这一轮的数字实际用的那份**,
+# 不是 done 发出那一刻的进程级值 —— 否则 done 说 40%、同一轮的卡片和详情却是按 28.4% 算的。
+# 本轮的快照来源(按序取第一个可用的):
+#   1. state["assumption_snap"]["display"]  —— search 节点读一次后写进会话状态的那份(本轮预排序/analyze/展示共用);
+#   2. 状态里第一套房 metrics["assumptions"] —— 没有 assumption_snap 的旧状态(快照机制出现之前写下的会话)仍带着每套房自己的假设;
+#   3. 兼容行为:两者都没有(没有结果的概念题/澄清、或旧状态),退回**此刻的进程级假设**,与改动前完全一致 —— 此时没有「本轮数字」可对应。
+def _snapshot_ok(snap) -> bool:
+    return (isinstance(snap, dict) and all(
+        isinstance(snap.get(k), (int, float)) and not isinstance(snap.get(k), bool) and math.isfinite(snap[k]) for k in ('opex_rate', 'other_acquisition_costs')))
+
+
+def _round_assumption_snapshot(state):
+    sources = [(state.get("assumption_snap") or {}).get("display") if isinstance(state.get("assumption_snap"), dict) else None]
+    sources += [m.get("assumptions") for m in (state.get("metrics") or [])[:1] if isinstance(m, dict)]
+    return next((s for s in sources if _snapshot_ok(s)), None)
+
+
+def _describe_snapshot_zh(snap) -> list[str]:
+    """通过假设模块的公共格式器描述快照,不重复读取其私有文案注册表。"""
+    return assumptions.describe(snap)
+
+
+def _done_assumptions(state, lang: str) -> list[str]:
+    snap = _round_assumption_snapshot(state)
+    if snap is None:                                   # 兼容:没有本轮快照,按改动前的行为描述当前进程级假设
+        snap_now = assumptions.snapshot()
+        return i18n.assumptions_describe_en(snap_now) if lang == "en" else assumptions.describe(snap_now)
+    return i18n.assumptions_describe_en(snap) if lang == "en" else _describe_snapshot_zh(snap)
+
+
+async def _run(thread_id: str, inputs, config, lang: str = "zh", refinement=None):
     """在工作线程里跑图,事件通过队列送回异步端。图是同步的、里面有 LLM 调用,
     直接在事件循环里跑会把整个服务卡住。"""
     loop = asyncio.get_running_loop()
@@ -189,7 +239,19 @@ async def _run(thread_id: str, inputs, config, lang: str = "zh"):
                                       if lang == "en" else "上一条还在处理,稍等一下再发"}))
             put(None)
             return
+        previous = None
         try:
+            previous = deepcopy(GRAPH.get_state(config).values or {})
+            if refinement is not None:
+                # 读旧条件、更新参数和执行检索必须在同一把锁内,失败可恢复整轮结果。
+                clean = g.prepare_refinement(refinement.params, previous.get("params") or {},
+                                             refinement.removed_attributes)
+                change = "(通过条件卡修改,以这些条件为准,未列出的旧偏好不再使用): " + json.dumps(clean, ensure_ascii=False)
+                GRAPH.update_state(config,
+                    {"user_query": change, "intent": "refine", "params": clean,
+                     "refinement_base": g.refinement.snapshot(previous), "turn_notice": None,
+                     "history": [{"role": "用户", "text": change}], "lang": lang},
+                    as_node="parse_intent")
             for mode, chunk in GRAPH.stream(inputs, config=config, stream_mode=["updates", "custom"]):
                 if mode == "custom":
                     if isinstance(chunk, dict) and "token" in chunk:
@@ -205,7 +267,7 @@ async def _run(thread_id: str, inputs, config, lang: str = "zh"):
                                          "count": len(out.get("metrics") or [])}))
                         # 排序后紧随其后的几套,给"换一批"翻页用。已经算好了,
                         # 一起发过去就行 —— 换一批不需要再跑一次图。
-                        if out.get("more"):
+                        if out.get("more") is not None:
                             put(("more", {"metrics": i18n.apply(out.get("more"), lang)}))
                         if not out.get("metrics"):
                             put(("results", {"metrics": []}))
@@ -217,11 +279,20 @@ async def _run(thread_id: str, inputs, config, lang: str = "zh"):
                         put(("answer", {"answer": out.get("answer")}))
             state = GRAPH.get_state(config).values or {}
             put(("done", {"intent": state.get("intent"), "params": state.get("params"),
+                          "notice": state.get("turn_notice"), "batch_offset": state.get("batch_offset") or 0,
                           "ranking": state.get("ranking"),
                           "count": len(state.get("metrics") or []),
-                          "assumptions": (i18n.assumptions_describe_en(assumptions.snapshot())
-                                          if lang == "en" else assumptions.describe())}))
+                          "assumptions": _done_assumptions(state, lang)}))
         except Exception as exc:                       # noqa: BLE001
+            if previous is not None:
+                restore = {key: previous.get(key) for key in g.State.__annotations__}
+                restore["history"] = Overwrite(previous.get("history") or [])
+                try:
+                    GRAPH.update_state(config, restore, as_node="explain")
+                except Exception as restore_error:
+                    put(("error", {"message": f"{type(exc).__name__}: {exc}; restore: {restore_error}",
+                                   "rollback_failed": True}))
+                    return
             put(("error", {"message": f"{type(exc).__name__}: {exc}"}))
         finally:
             lock.release()
@@ -245,6 +316,7 @@ class RefineIn(BaseModel):
     thread_id: str
     params: dict
     lang: str = "zh"
+    removed_attributes: list[str] = []
 
 
 class AssumeIn(BaseModel):
@@ -268,20 +340,7 @@ async def chat(body: ChatIn):
 async def refine(body: RefineIn):
     """条件卡改过之后:参数直接写进会话状态,从 search 继续跑,不经过 LLM 解析。"""
     config = new_session(body.thread_id)
-    previous = (GRAPH.get_state(config).values or {})
-    prev_params = previous.get("params") or {}
-    fallback_query = (body.params.get("semantic_query")
-                      or prev_params.get("semantic_query")
-                      or previous.get("user_query") or "property")
-    clean = g._sanitize(dict(body.params), fallback_query)
-    GRAPH.update_state(
-        config,
-        {"user_query": "(调整了条件)", "intent": "refine", "params": clean,
-         "history": [{"role": "用户", "text": "(在条件卡上调整了条件)"}],
-         "lang": body.lang},
-        as_node="parse_intent",
-    )
-    return StreamingResponse(_run(body.thread_id, None, config, body.lang),
+    return StreamingResponse(_run(body.thread_id, None, config, body.lang, refinement=body),
                              media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -323,6 +382,7 @@ async def rebatch(body: RebatchIn):
          "batch_offset": offset,
          "user_query": prev.get("user_query") or "找房",
          "intent": "new_search",
+         "turn_notice": None, "refinement_base": None,
          "history": [{"role": "用户",
                       "text": f"(换了一批,看第 {offset + 1}–{offset + len(batch)} 套)"}],
          "lang": body.lang},
@@ -389,6 +449,21 @@ class RecalcIn(BaseModel):
     annual_rent: float | None = None
     opex_rate: float
     other_acquisition_costs: float
+
+
+@app.get("/api/property/{property_id}")
+async def property_detail(property_id: int, lang: str = "zh"):
+    """一套房的完整详情数据,与搜索结果同一口径(收藏夹里不在当前结果中的房源用)。
+
+    按编号现算 —— 等于一次没有偏好条件的检索,只跑 analyze → enrich → present,不调用 LLM。
+    不读收藏时存下的快照:估值、回报率都随模型和假设变化,旧值不能当成现在的值展示。
+    房源表被整体重建后编号可能不在了,如实返回 404,由前端说明。
+    """
+    lang = "en" if lang == "en" else "zh"
+    metrics = await asyncio.to_thread(g.detail_metrics, [property_id], lang)
+    if not metrics:
+        raise HTTPException(404, "property not found")
+    return {"metric": i18n.apply(metrics, lang)[0]}
 
 
 @app.post("/api/recalc")

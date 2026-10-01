@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>真实 3D 建模检查 · 筑明AI</title>
+<style>
+  :root{color-scheme:light;font-family:system-ui,"Microsoft YaHei",sans-serif;color:#33372f;background:#f6f5f2}
+  *{box-sizing:border-box}body{margin:0}button,a{font:inherit;color:inherit}button{cursor:pointer}a{text-decoration:none}
+  header{position:fixed;z-index:3;inset:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:22px 32px;background:linear-gradient(#f6f5f2 60%,#f6f5f200)}
+  .brand{font-weight:650}.brand small{display:block;font-size:11px;font-weight:400;letter-spacing:.08em;margin-top:6px;color:#7d8175}
+  nav{display:flex;flex-wrap:wrap;gap:6px}button{border:1px solid #dcded6;border-radius:30px;background:#ffffffb8;padding:9px 15px;font-size:12px}button[aria-pressed=true]{background:#343a2d;color:#fff;border-color:#343a2d}button:disabled{opacity:.45;cursor:default}
+  button:focus-visible,a:focus-visible{outline:2px solid #798668;outline-offset:4px}
+  #viewport{position:fixed;inset:0;touch-action:none}canvas{display:block;width:100%;height:100%}
+  #sample{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;background:#f6f5f2}#sample[hidden]{display:none}
+  .status{position:fixed;left:32px;bottom:30px;right:32px;display:flex;align-items:flex-end;justify-content:space-between;gap:20px;pointer-events:none;font-size:12px;color:#636b5a;line-height:1.8}
+  .status a{pointer-events:auto;text-decoration:underline;text-underline-offset:4px}.status p{margin:0}.status strong{font-weight:500}
+  #message{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:85vw;text-align:center;font-size:13px;color:#77806c;background:#f6f5f2e6;border-radius:12px;padding:16px 24px}#message[hidden]{display:none}
+  @media(max-width:700px){header{padding:18px;align-items:flex-start}.brand small{font-size:9px}nav{justify-content:flex-end;max-width:210px}button{font-size:10px;padding:7px 11px}.status{left:18px;right:18px;bottom:18px;font-size:10px}.status .files{max-width:140px;text-align:right}}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head>
+<body>
+<div id="viewport" aria-label="真实三维城市模型，可拖动旋转"></div>
+<img id="sample" alt="Cycles 实际渲染样张" hidden>
+<header><div class="brand">筑明AI<small>真实 3D · 建模检查 01</small></div><nav aria-label="查看方式">
+  <button data-view="model" aria-pressed="true">旋转模型</button><button data-view="render" aria-pressed="false">Cycles 样张</button><button data-view="detail" aria-pressed="false">近景渲染</button><button data-view="reference" aria-pressed="false">目标参考</button><button id="wire" aria-pressed="false" disabled>线框</button>
+</nav></header>
+<p id="message" role="status">正在加载真实模型…</p>
+<footer class="status"><div><strong id="mode">真实几何检查</strong><p id="hint">拖动旋转 · 滚轮缩放 · 右键平移</p></div><div class="files"><a href="blender/city-01.blend" download>Blender 工程</a> · <a href="blender/city-01.glb" download>GLB 模型</a><p>建模初稿 · 尚未达到目标参考，未接主站</p></div></footer>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+const host=document.querySelector('#viewport'), sample=document.querySelector('#sample'), message=document.querySelector('#message'), wire=document.querySelector('#wire');
+let selected='model', dirty=true, model=null;
+const scene=new THREE.Scene();scene.background=new THREE.Color('#f6f5f2');
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.setSize(innerWidth,innerHeight);renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=.95;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.shadowMap.autoUpdate=false;host.append(renderer.domElement);
+scene.environment=new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(),.04).texture;scene.environmentIntensity=.3;
+scene.add(new THREE.HemisphereLight(0xffffff,0xb2b7a8,.45));
+const key=new THREE.DirectionalLight(0xfffaf2,2.1);key.position.set(-150,220,100);key.target.position.set(0,0,-60);key.castShadow=true;key.shadow.mapSize.set(2048,2048);Object.assign(key.shadow.camera,{left:-330,right:330,top:330,bottom:-330,near:1,far:900});key.shadow.normalBias=.12;scene.add(key,key.target);
+const camera=new THREE.PerspectiveCamera(36,innerWidth/innerHeight,.2,2200);camera.position.set(140,100,290);
+const controls=new OrbitControls(camera,renderer.domElement);controls.target.set(0,20,-45);controls.enableDamping=true;controls.dampingFactor=.09;controls.minDistance=35;controls.maxDistance=900;controls.maxPolarAngle=Math.PI*.495;controls.update();controls.addEventListener('change',()=>{dirty=true;});
+new GLTFLoader().load('blender/city-01.glb',gltf=>{
+  model=gltf.scene;scene.add(model);let meshes=0;model.traverse(obj=>{if(obj.isMesh){meshes++;obj.frustumCulled=false;obj.castShadow=true;obj.receiveShadow=true;}});renderer.shadowMap.needsUpdate=true;
+  host.dataset.meshCount=String(meshes);host.dataset.loaded='true';message.hidden=true;wire.disabled=false;dirty=true;
+},event=>{if(event.total)message.textContent=`正在加载真实模型… ${Math.round(event.loaded/event.total*100)}%`;},error=>{message.textContent='模型加载失败，请检查本地服务器和模型文件。';host.dataset.loaded='error';console.error(error);});
+const views={render:['blender/renders/city-01.png','Cycles 实际渲染','固定相机渲染 · 来自同一个 Blender 场景'],detail:['blender/renders/waterfront-detail.png','近景实际渲染','另一台真实相机 · 检查窗框、玻璃与树木几何'],reference:['assets/city-still-01.png','已认可的目标参考','仅作建模和灯光参考，不是最终背景资产']};
+document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{
+  selected=button.dataset.view;document.querySelectorAll('[data-view]').forEach(item=>item.setAttribute('aria-pressed',String(item===button)));
+  const isModel=selected==='model';host.hidden=!isModel;sample.hidden=isModel;wire.disabled=!isModel||!model;controls.enabled=isModel;message.hidden=!isModel||!!model;
+  if(isModel){document.querySelector('#mode').textContent='真实几何检查';document.querySelector('#hint').textContent='拖动旋转 · 滚轮缩放 · 右键平移';}
+  else{sample.src=views[selected][0];sample.alt=views[selected][1];document.querySelector('#mode').textContent=views[selected][1];document.querySelector('#hint').textContent=views[selected][2];}dirty=true;
+}));
+wire.addEventListener('click',()=>{const value=wire.getAttribute('aria-pressed')!=='true';wire.setAttribute('aria-pressed',String(value));model.traverse(obj=>{if(obj.isMesh)for(const mat of (Array.isArray(obj.material)?obj.material:[obj.material]))mat.wireframe=value;});dirty=true;});
+window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);dirty=true;});
+document.addEventListener('visibilitychange',()=>{dirty=true;});
+renderer.setAnimationLoop(()=>{if(document.hidden||selected!=='model')return;controls.update();if(dirty){renderer.render(scene,camera);dirty=false;}});
+</script>
+</body></html>

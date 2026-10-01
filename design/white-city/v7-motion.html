@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>城市微动 01 · 筑明AI</title>
+  <!-- Experimental motion study of the approved still. The bitmap and v6 baseline are unchanged. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Serif+SC:wght@500;600&display=swap">
+  <style>
+    :root {
+      --paper: #f6f5f2;
+      --ink: #232420;
+      --muted: #70716a;
+      --line: rgb(48 50 43 / 16%);
+      --gutter: clamp(24px, 4.3vw, 84px);
+      --content-left: clamp(230px, 22vw, 440px);
+      font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      -webkit-font-smoothing: antialiased;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, input { font: inherit; }
+    a { color: inherit; text-decoration: none; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button { color: inherit; cursor: pointer; }
+    button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid #686b5b; outline-offset: 5px; }
+    .hero { position: relative; isolation: isolate; min-height: 760px; height: 100svh; overflow: hidden; }
+    .city { position: absolute; z-index: -2; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center bottom; }
+    .city-drift { position: absolute; z-index: -2; inset: 0; transform: scale(1.032); pointer-events: none; }
+    .city-pointer { position: absolute; inset: 0; }
+    .city-pointer .city { z-index: 0; }
+    [data-motion-state="playing"] .city-drift,
+    [data-motion-state="playing"] .city-pointer { will-change: transform; }
+    #toggle-motion { gap: 7px; }
+    #toggle-motion svg { width: 12px; height: 12px; }
+    #toggle-motion[hidden] { display: none; }
+    #toggle-motion:disabled { cursor: default; }
+    .motion-controls { display: flex; align-items: center; gap: 8px; }
+    .footer-wash { position: absolute; z-index: -1; inset: auto 0 0; height: 12%; background: linear-gradient(transparent, rgb(246 245 242 / 65%)); pointer-events: none; }
+    .masthead { position: absolute; top: 40px; left: var(--gutter); right: var(--gutter); display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+    .brand strong { display: block; font-size: 25px; font-weight: 650; letter-spacing: .02em; }
+    .brand span { display: block; margin-top: 8px; color: var(--muted); font: 10px/1.7 "IBM Plex Mono", monospace; letter-spacing: .12em; }
+    .review-tools { display: flex; align-items: center; gap: 24px; color: #66685f; font-size: 12px; }
+    .review-tools a, .review-tools button { display: inline-flex; align-items: center; min-height: 36px; }
+    .review-tools button { border: 1px solid var(--line); background: rgb(255 255 255 / 65%); border-radius: 99px; padding: 0 15px; }
+    .rail { position: absolute; left: var(--gutter); top: 24%; width: clamp(112px, 10vw, 172px); list-style: none; margin: 0; padding: 0; }
+    .rail li { position: relative; padding: 15px 0 17px; border-bottom: 1px solid var(--line); color: #8a8c82; font: 10px/1.5 "IBM Plex Mono", monospace; letter-spacing: .05em; }
+    .rail b { display: block; margin-bottom: 5px; font-weight: 500; color: #393c32; }
+    .rail li::after { content: ""; position: absolute; right: -2px; bottom: -2px; width: 4px; height: 4px; border-radius: 50%; background: #484b40; }
+    .content { position: absolute; top: 15%; left: var(--content-left); width: min(65vw, 1100px); }
+    h1 { margin: 0; font: 500 clamp(44px, 4.3vw, 78px)/1.3 "Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, serif; letter-spacing: -.035em; }
+    .description { margin: 23px 0 0; font-size: clamp(14px, 1.12vw, 20px); line-height: 1.85; color: #75776e; }
+    .composer { position: relative; margin: clamp(28px, 3.6vh, 48px) 0 0 -22px; width: 100%; height: clamp(64px, 5.4vw, 82px); display: flex; align-items: center; gap: 20px; padding: 7px 8px 7px 26px; border: 1px solid rgb(255 255 255 / 80%); border-radius: 99px; background: rgb(255 255 255 / 96%); box-shadow: 0 20px 45px -20px rgb(58 53 43 / 23%), 0 1px 2px rgb(40 40 36 / 3%); }
+    .search-icon { width: 23px; height: 23px; flex: none; color: #7b7d73; }
+    .composer input { flex: 1; width: 0; min-width: 0; height: 100%; border: 0; outline: 0; background: none; color: var(--ink); font-size: clamp(13px, 1.1vw, 18px); }
+    .composer input::placeholder { color: #999b93; }
+    .composer:focus-within { outline: 1px solid #919686; outline-offset: 4px; }
+    .submit { display: grid; place-items: center; flex: none; height: 100%; aspect-ratio: 1; border: 0; border-radius: 50%; background: #252720; color: white; }
+    .submit:hover { background: #404439; }
+    .notice { position: relative; margin: 12px 0 0; max-width: 650px; padding: 9px 15px; border-radius: 8px; background: rgb(255 255 255 / 92%); font-size: 12px; line-height: 1.7; color: #53584a; }
+    .notice[hidden] { display: none; }
+    .footer { position: absolute; left: var(--gutter); right: var(--gutter); bottom: 26px; display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; color: #696c61; font: 10px/1.8 "IBM Plex Mono", monospace; letter-spacing: .08em; }
+    .footer .motto { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); font-family: inherit; font-size: 11px; letter-spacing: .65em; white-space: nowrap; }
+    .edition { text-align: right; }
+    .edition span { display: block; }
+    .edition span::after { content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 12px; border: 1px solid currentColor; }
+    .edition span:last-child::after { background: currentColor; box-shadow: inset 0 0 0 1px var(--paper); }
+    .art-only .page-copy { visibility: hidden; }
+    .art-only .review-tools { padding: 4px 10px; border-radius: 99px; background: rgb(246 245 242 / 88%); }
+    @media (min-aspect-ratio: 21/9) {
+      .city { object-position: center 75%; }
+      .hero { min-height: 720px; }
+      .content { top: 13%; }
+      h1 { font-size: clamp(48px, 3.1vw, 72px); }
+      .description { margin-top: 16px; }
+    }
+    @media (max-width: 900px) {
+      :root { --content-left: 18%; }
+      .rail { display: none; }
+      .content { top: 18%; width: 76%; }
+      h1 { font-size: clamp(42px, 6vw, 62px); }
+      .description { font-size: 14px; }
+    }
+    @media (max-width: 600px) {
+      :root { --gutter: 24px; --content-left: 24px; }
+      .hero { min-height: 740px; }
+      .city { object-fit: cover; object-position: 64% bottom; }
+      .masthead { top: 25px; align-items: center; gap: 12px; }
+      .brand strong { font-size: 22px; }
+      .brand span { font-size: 8px; }
+      .review-tools { gap: 10px; font-size: 10px; }
+      .review-tools a { display: none; }
+      .review-tools button { padding: 0 12px; }
+      .review-tools { align-self: flex-start; }
+      .motion-controls { flex-direction: column; align-items: flex-end; gap: 5px; }
+      .motion-controls button { min-height: 32px; }
+      .content { top: 18%; width: calc(100% - 48px); }
+      h1 { font-size: clamp(35px, 8.5vw, 48px); letter-spacing: -.045em; }
+      .description { font-size: 12px; line-height: 1.9; margin-top: 20px; }
+      .composer { margin-left: -4px; width: calc(100% + 8px); height: 60px; padding-left: 18px; gap: 11px; }
+      .composer input { font-size: 12px; }
+      .search-icon { width: 18px; height: 18px; }
+      .footer { font-size: 8px; bottom: 22px; }
+      .footer .motto { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .city-drift, .city-pointer { transform: none !important; will-change: auto !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="hero">
+    <div class="city-drift" aria-hidden="true"><div class="city-pointer">
+      <img class="city" src="assets/city-still-01.png" alt="" fetchpriority="high" decoding="async">
+    </div></div>
+    <div class="footer-wash" aria-hidden="true"></div>
+    <header class="masthead">
+      <div class="brand page-copy"><strong>筑明AI</strong><span>SYNTHESIZE INFORMATION<br>FOR A BETTER HOME</span></div>
+      <nav class="review-tools" aria-label="视觉预览工具">
+        <a href="v6-still.html" target="_blank" rel="noopener">静帧对照 ↗</a>
+        <a href="assets/city-still-01.png" target="_blank" rel="noopener">原图 ↗</a>
+        <div class="motion-controls">
+        <button id="toggle-motion" type="button" aria-pressed="false" aria-label="暂停动态" hidden>
+          <svg viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="M3 2h2v8H3zm4 0h2v8H7z"/></svg><span>暂停动态</span>
+        </button>
+        <button id="toggle-copy" type="button" aria-pressed="false">只看城市</button>
+        </div>
+      </nav>
+    </header>
+    <ol class="rail page-copy" aria-hidden="true"><li><b>01</b>SPACE</li><li><b>02</b>LIVING</li><li><b>03</b>COMMUNITY</li><li><b>04</b>ANALYSIS</li></ol>
+    <div class="content">
+    <section class="intro page-copy" aria-labelledby="headline">
+      <h1 id="headline">更好的家，<br>从一个问题开始。</h1>
+      <p class="description">输入预算、区域或偏好。<br>所有评估数据均基于实测、假设校验与模型测算。</p>
+    </section>
+    <form class="composer page-copy" aria-label="找房输入框视觉预览">
+      <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>
+      <input type="text" aria-label="找房需求" placeholder="输入预算、区域或偏好，例如「100万内 · 近车站 · 3房」">
+      <button class="submit" type="submit" aria-label="预览发送"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+    </form>
+    <p class="notice page-copy" role="status" hidden>当前为城市视觉预览，输入内容不会发送。房源检索仍在主站。</p>
+    </div>
+    <footer class="footer page-copy"><div>AI<br>FOR A BETTER HOME</div><div class="motto">家 · 生活 · 可能性</div><div class="edition"><span>NESTWISE</span><span>MOTION STUDY 01</span></div></footer>
+  </main>
+  <script>
+    const toggle = document.querySelector('#toggle-copy');
+    toggle.addEventListener('click', () => {
+      const hidden = document.body.classList.toggle('art-only');
+      toggle.setAttribute('aria-pressed', String(hidden));
+      toggle.textContent = hidden ? '显示页面' : '只看城市';
+    });
+    document.querySelector('.composer').addEventListener('submit', (event) => {
+      event.preventDefault();
+      document.querySelector('.notice').hidden = false;
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && document.body.classList.contains('art-only')) toggle.click();
+    });
+  </script>
+  <script src="city-motion.js" defer></script>
+</body>
+</html>

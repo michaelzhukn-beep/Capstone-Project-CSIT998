@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>筑明AI · 洁净白模 v25</title>
+<style>
+  :root { --page: #F8F7F4; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--page); font: 13px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; color: #2a2a28; }
+  header { display: flex; align-items: baseline; justify-content: space-between; padding: 14px 24px 6px; }
+  header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .04em; }
+  header .eyebrow { margin: 0; font-size: 11px; letter-spacing: .16em; color: #8a8781; text-transform: uppercase; }
+  nav a { margin-left: 12px; color: #55524d; text-decoration: none; border-bottom: 1px solid #c9c6bf; }
+  nav a:hover { color: #000; }
+  .subbar { display: flex; justify-content: space-between; padding: 0 24px 10px; color: #8a8781; font-size: 11px; }
+  .subbar p { margin: 0; }
+  #workspace { width: 100%; aspect-ratio: 1883 / 1054; position: relative;
+    background: linear-gradient(180deg, #FBFAF8 0%, #F7F6F3 46%, #F2F1ED 74%, #EDECE7 100%); }
+  #viewport { position: absolute; inset: 0; }
+  #viewport canvas { display: block; width: 100%; height: 100%; }
+  #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px;
+    background: #f7f6f3; color: #6b6862; font-size: 12px; }
+  #loading[hidden] { display: none; }
+  #retry { font: inherit; padding: 3px 10px; border: 1px solid #c9c6bf; background: #fff; border-radius: 3px; cursor: pointer; }
+  /* 机位微调面板(?tune=1):拖到与目标构图重合,读出数字即可定稿 */
+  #tune { position: absolute; left: 16px; bottom: 16px; z-index: 5; display: flex; flex-direction: column; gap: 6px;
+    padding: 10px 12px; border-radius: 8px; background: rgba(255,255,255,.86); border: 1px solid #dedbd4;
+    box-shadow: 0 2px 10px rgba(0,0,0,.06); font: 11px/1.4 ui-monospace, Consolas, monospace; color: #55524d; }
+  #tune[hidden] { display: none; }
+  #tune label { display: flex; align-items: center; gap: 8px; }
+  #tune input[type=range] { width: 190px; }
+  #tune output { min-width: 42px; text-align: right; color: #1d1c1a; }
+  #tune .val { font-weight: 600; }
+  footer { padding: 10px 24px 20px; color: #8a8781; font-size: 11px; }
+  footer p { margin: 0; }
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head>
+<body>
+  <header>
+    <div><p class="eyebrow">v25 · 洁净白模</p><h1>城市柔光。</h1></div>
+    <nav aria-label="阶段">
+      <a href="?stage=neutral">中性白模</a>
+      <a href="?stage=warm">暖光无辉光</a>
+      <a href="?stage=final">最终</a>
+      <a href="?view=sample">调试小样</a>
+    </nav>
+  </header>
+  <div class="subbar"><p id="summary">固定机位 · 白色城市 · 中性棚拍环境</p><p>原 v23 / v24 未改动</p></div>
+  <main id="workspace" aria-label="固定机位城市效果">
+    <div id="viewport" aria-label="真实三维城市模型" data-loaded="false"></div>
+    <div id="loading" role="status" aria-live="polite"><span id="loading-copy">正在准备城市灯光…</span><button id="retry" hidden>重新加载</button></div>
+    <div id="tune" hidden>
+      <label>后撤 zoom<input id="t-zoom" type="range" min="0.30" max="1.20" step="0.01"><output id="t-zoomv"></output></label>
+      <label>下移 pan <input id="t-pan" type="range" min="-0.10" max="0.50" step="0.01"><output id="t-panv"></output></label>
+      <label>底部渐隐   <input id="t-fade" type="range" min="0" max="100" step="1"><output id="t-fadev"></output></label>
+    </div>
+  </main>
+  <footer><p>实心白色非金属 PBR · 垂直渐变棚拍环境主导 · 低强度主光 · 浅阴影 · 局部暖光 · 只作用于灯片的轻辉光</p></footer>
+  <script type="module" src="city-v25.mjs?v=1"></script>
+</body>
+</html>

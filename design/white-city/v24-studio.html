@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f6f5f1">
+  <title>筑明AI · 城市柔光</title>
+  <link rel="stylesheet" href="layout-studio-v22.css?v=1">
+  <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head>
+<body>
+  <header>
+    <div><p class="eyebrow">NESTWISE / CITY STUDIO 17 · 实时 PBR 白模(副本)</p><h1>城市柔光。</h1></div>
+    <nav class="modes" aria-label="阶段"><a class="stage" href="?stage=neutral">中性白模</a><a class="stage" href="?stage=warm">暖光无辉光</a><a class="stage" href="?stage=final">最终</a></nav>
+  </header>
+  <div class="subbar"><p id="summary">固定机位 · 白色城市 · 局部暖光</p><p class="lock"><span aria-hidden="true">○</span> 机位已锁定</p></div>
+  <main id="workspace" aria-label="固定机位城市效果">
+    <div id="viewport" aria-label="真实三维城市模型" data-loaded="false" data-mode="studio"></div>
+    
+    <div class="view-label" id="view-label">实时 PBR · 三维模型</div>
+    <div id="loading" role="status" aria-live="polite"><span id="loading-copy">正在准备城市灯光…</span><button id="retry" hidden>重新加载</button></div>
+  </main>
+  <footer><div><p class="phase">v24 · 光照实验 · 原版 v21 / v22 未改动</p><p id="detail">主光 + 弱填光 + 中性环境 · 实心白色 PBR · 浅阴影 · 局部暖光 · 只作用于灯片的轻辉光</p></div></footer>
+  <script type="module" src="city-light-v24.mjs?v=1"></script>
+</body>
+</html>

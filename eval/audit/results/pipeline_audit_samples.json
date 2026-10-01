@@ -1,0 +1,59 @@
+{
+ "J1b 毛回报率第一名是否可信": [
+  {
+   "id": 1236,
+   "address": "6/141 Centre Rd",
+   "suburb": "Brighton East",
+   "property_type": "apartment",
+   "price": 340000,
+   "annual_rent": 32916,
+   "gross_yield": 0.09681176470588235,
+   "predicted_price": 429945,
+   "valuation_position": "within"
+  },
+  {
+   "id": 8834,
+   "address": "10/30 Pickett St",
+   "suburb": "Footscray",
+   "property_type": "apartment",
+   "price": 170000,
+   "annual_rent": 14560,
+   "gross_yield": 0.08564705882352941,
+   "predicted_price": 221257,
+   "valuation_position": "below"
+  },
+  {
+   "id": 7416,
+   "address": "145/38 Mt Alexander Rd",
+   "suburb": "Travancore",
+   "property_type": "apartment",
+   "price": 315000,
+   "annual_rent": 25987,
+   "gross_yield": 0.0824984126984127,
+   "predicted_price": 375061,
+   "valuation_position": "within"
+  },
+  {
+   "id": 12802,
+   "address": "7/33 Eldridge St",
+   "suburb": "Footscray",
+   "property_type": "apartment",
+   "price": 240000,
+   "annual_rent": 19240,
+   "gross_yield": 0.08016666666666666,
+   "predicted_price": 310872,
+   "valuation_position": "below"
+  },
+  {
+   "id": 11563,
+   "address": "2115/18 Mt Alexander Rd",
+   "suburb": "Travancore",
+   "property_type": "apartment",
+   "price": 341500,
+   "annual_rent": 26973,
+   "gross_yield": 0.07898389458272329,
+   "predicted_price": 436508,
+   "valuation_position": "below"
+  }
+ ]
+}
