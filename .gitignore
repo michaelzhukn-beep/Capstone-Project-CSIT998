@@ -81,4 +81,8 @@ design/white-city-try/**
 design/white-city/**/backup-*/**
 design/white-city-try/**/backup-*/**
 *.dump.tmp
+# Small JSON inputs read by tests/test_city_*.mjs:
 !design/white-city/blender/city-04-assets.json
+!design/white-city/city-view.json
+!design/white-city/blender/city-04-manifest.json
+!design/white-city/blender/lighting-verification-city-05.json

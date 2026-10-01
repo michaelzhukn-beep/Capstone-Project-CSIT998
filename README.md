@@ -20,6 +20,10 @@ plain Python formulas. If nothing matches, that path skips the LLM entirely.
 
 ➡️ **Full feature list:** [`docs/en/FEATURES.md`](docs/en/FEATURES.md)
 
+| Homepage | Results, filters and map |
+|---|---|
+| ![Homepage with the 3D city scene](docs/en/img/home.jpg) | ![A search with results, filter chips and the map](docs/en/img/results.jpg) |
+
 ---
 
 ## Quick start (about 15 minutes, mostly downloads)
@@ -38,7 +42,7 @@ You need about 3 GB of free disk space (Python packages, the embedding model and
 ### 1. Get the code
 
 ```bash
-git clone <this-repo-url>
+git clone https://github.com/michaelzhukn-beep/Capstone-Project-CSIT998.git
 cd Capstone-Project-CSIT998
 ```
 

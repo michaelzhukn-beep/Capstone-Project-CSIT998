@@ -18,15 +18,18 @@
 
 ## Current Working State
 
-端到端可用。需要先起数据库(Docker,Postgres + pgvector,端口 15432),再跑
-`python serve.py`(默认 8000)。
+端到端可用,**已推送到所有者的公开仓库 https://github.com/michaelzhukn-beep/Capstone-Project-CSIT998**,组员按英文 `README.md` 下载即可运行:
+`pip install -r requirements.txt` → 复制 `.env.example` 填 LLM key → `docker compose -f db/docker-compose.yml up -d`
+→ `python db/setup_db.py`(从 `db/seed/properties.dump` 恢复房源)→ `python serve.py`(默认 8000)。
+这条路径 2026-10-01 在全新克隆、全新 venv、独立临时容器上实测通过。
 
 - 数据:20,800 条墨尔本成交记录 + OSM 地理快照 + 规划分区 + 学区 + LGA 罪案率
 - 估值模型已训练并保存在 `models/`(XGBoost,对数价)
 - 界面中英双语,右上角一个开关切换
 - LLM 走 OpenAI 兼容端点(当前 DeepSeek),key 在 `.env`,**不入库**
 - 首屏(≥900px)背景是一座烘焙好的白模沙盘,GLB + 贴图共约 19MB,放在
-  `app/web/showroom/`;加载失败或窄屏时自动回退到原来的 SVG 城市
+  `app/web/showroom/`(已入库);加载失败或窄屏时自动回退到原来的 SVG 城市
+- 地图是「一整块厚玻璃」面板,底图为 OpenFreeMap 矢量瓦片(无 WebGL 时退回 OSM 栅格)
 
 ## Completed Features
 
@@ -52,45 +55,39 @@
   正交相机平移在「城市」与「四套户型样板」两个画面间切换,户型牌点击直接发起搜索;
   鼠标轻微跟随(带阻尼),左右箭头转场。取景按模型包围盒和输入框实际位置自适应。
   牌面 40 条双语词条洗牌轮换(标题不重复);河面按所有者效果图调色
+- **账号与收藏**:可选登录(居中弹窗,scrypt + HttpOnly 会话 Cookie,失败限流);卡片心形收藏、
+  抽屉(最近/按区/按价、超过 20 套出搜索)、收藏打开实时详情(`/api/property/{id}`),关闭回到抽屉
+- **并排详情**:最多 3 套,按段对齐、只看不同、每行最优标记
+- **地图面板**:MAP.VIEW + 实时中心坐标、城市选择(仅墨尔本可用,其余「即将支持」)、房源数、
+  显示全部/缩放竖条;四周磨砂 + 边缘斜面光
+- **对外文档与一键建库**:英文 README + `docs/en/`;`db/setup_db.py` + 种子
 - **多轮修改**:模型只输出本轮变更(changes),程序确定性应用,没提到的条件保留;
   「再便宜点 / 再安静一点」按上一轮实际结果算相对目标;无兼容结果时恢复上一轮;出错整轮回滚。
   取舍属性(安静↔热闹):词条保留、两个分数此消彼长,系统推断的门槛可小步让出并写明
 
 ## Current Task
 
-**本轮开发/测试已暂停。** G3-001/002均已合入并完成定向回归；当前问题、部分修复和未验证范围见 docs/CURRENT_ISSUES_2026-10-01.md。首屏沙盘与多轮修改仍等所有者真实浏览器验收；动画工作暂停。
+**2026-10-01:仓库整理并发布给组员,已完成。** 包含:英文对外文档、种子库与一键建库、
+地图厚玻璃面板、印花税取整、GBK/DSN 两项修复、此前积压的登录/收藏/并排详情。
+下一步见 `TODO.md` 的 **Now**(所有者视觉验收、选中图钉样式、内存诊断)。
 
-2026-09-24 完成并验证:
-- **多轮修改提示词与示例对齐**:`_PARSE_SYSTEM` 的 refine 说明与示例改为只列 changes,
-  `tests/test_planning.py` 转绿。真实模型 `tests/check_refinement_language.py`(17 条,含新增
-  「先热闹再安静」5 种说法)连跑两遍全过;首轮 8 句普通搜索的硬条件与改前一致。
-- **热闹 → 再安静一点**:规则见 ARCHITECTURE「多轮修改」与 DECISIONS。真实页面实测连说三次:
-  安静中位 27→38→53→66,热闹 100→100→87→50,第三次门槛自动由 60 让到 50 并写明。
-  离线检查 63 项(`tests/test_refinement.py`)与真实数据回归(`tests/test_refinement_api.py`)通过。
-- **牌面词条**:每栋 10 条、共 40 条,标题全局唯一,洗牌轮换。浏览器采样 100 秒:40 条全部出现、
-  同屏重复 0 次;80 条中英问句逐条走真实解析 + 真实检索,房型/房数/预算/区名全对且都有结果;
-  `tests/test_showroom_browser.mjs` PASS(投影误差 0px)。
-- **河面颜色**:按所有者给的效果图(截图经 AI 处理,只作颜色目标)在网页运行时调色,
-  水面中位色与效果图相差 0、截面最大 2 级(`design/white-city/LIGHTING_V24_EXPERIMENTS.md` 实验 18)。
+Codex 2026-10-01 的缺陷修复轮(G3-001/002、WAVE08 ROI、车位、DEF-0001..0011)已合入;
+仍未验证的范围见 `docs/CURRENT_ISSUES_2026-10-01.md`(其中「印花税半元舍入」一项已核实并修复)。
 
-**验证环境注意**:Browser 面板没有 WebGL,沙盘在里面只会显示 SVG 回退;沙盘相关的检查要用带 GPU 的
-Chrome(无头 Chrome 加 `--use-angle=d3d11` 可用)或所有者自己的浏览器。
+**验证环境注意**:Browser 面板的 WebGL 时有时无;沙盘与地图质感用带 GPU 的无头 Chrome
+(`--headless=new --use-angle=d3d11 --ignore-gpu-blocklist`)或所有者浏览器核对。地图在面板里不能缩放。
 
 渲染路线:Blender 4.5 + Cycles/OptiX 离线把光烘成贴图 → 导出 GLB(Draco + WEBP)→
-网页用 `MeshBasicMaterial` 无光照显示。所以浏览器里不算光,画质等于离线渲染,
-代价是**相机被锁死**:只能在烘焙时那个正交画框内平移缩放,不能旋转。
-
-源文件与脚本在 `design/white-city/blender/`(v27 台座、v28 户型、烘焙、图层、后期、
-导出),说明见该目录的 `README.md`、`LIGHTING_V24_EXPERIMENTS.md`(逐次实验参数)、
-`RENDER_LESSONS.md`(工作流复盘)。**`design/white-city/` 整个目录有 2.2GB**,
-绝大部分是渲染产物和 `.blend`,不要整目录入库。
-
-网页侧只有一个模块:`app/web/showroom/showroom.mjs`,与 `app.js` 通过
-三个自定义事件通信,互不引用。
-
-下一件该做的事见 `TODO.md` 的 **Now**。
+网页用 `MeshBasicMaterial` 无光照显示。代价是**相机被锁死**:只能在烘焙时那个正交画框内平移缩放。
+源文件与脚本在 `design/white-city/blender/`;二进制(.blend、烘焙产物,约 2.5GB)只在本机,不入库。
 
 ## Recent Changes
+
+- **仓库发布(2026-10-01)**:公开仓库 https://github.com/michaelzhukn-beep/Capstone-Project-CSIT998;英文文档、种子库、一键建库;设计目录只入文本源码。
+  提交时遇到一个损坏的松散对象(Codex 检查点引用的 `city-04-assets.glb`),已由工作区文件按哈希重建。
+- **地图改为厚玻璃面板 + 矢量底图(2026-10-01)**:见 DECISIONS;黄色颜料撤掉,选中态待定
+- **印花税按 s 28(1) 半元向下取整(2026-10-01)**:历史四档表不变,见 DECISIONS
+- **启动输出 GBK 安全、`load_properties.py` 读 `.env` 的 DSN(2026-10-01)**
 
 - **G3-002已修、G3两项完成后暂停（2026-10-01）**:done假设描述取本轮快照/旧指标，中文使用公共describe(snap)避免私有注册表耦合；主源码51/51、Chrome中英114/114及精度30/文案65通过，全局不改。当前完整清单见 docs/CURRENT_ISSUES_2026-10-01.md；合入证据见 docs/MERGE_G3_002_SNAPSHOT_2026-10-01.md，真实LLM/模型/完整E2E未验。
 
@@ -131,9 +128,6 @@ Chrome(无头 Chrome 加 `--use-angle=d3d11` 可用)或所有者自己的浏览�
 
 ## Known Issues
 
-- **税款半元舍入口径仅疑点**:固定PG样本的5条在half-even/half-up之间有差；法律口径未核实，不认定缺陷、未改公式，详见当前问题清单。
-
-
 - **ROI 候选截断（DEF-0005/0007，已合入部分修复）**:WAVE08按ROI预排序、同快照扩容、最终Python重排和审查者三项小修订已合入；主源码专项42/42、候选30/30、扩容/公式回归通过。单轮上限40,000，无法认证时保留范围披露；真实模型/几何扩容成本及按ID详情/解释原子性未验；done描述已按本轮快照修复。协调PG仅一次候选SQL246.070ms/约6.9MB临时盘，不是E2E。详见 docs/MERGE_WAVE08_ROI_2026-10-01.md。
 - **展示口径待核实**:DEF-0010/0011 已选择性合入并做离线/隔离 DOM 回归；OBS-0001 weakNote 全库分位措辞仍仅源码可疑、真实数据未复现。越出输入契约的直接函数调用仍可能显示 $NaNk、排位 NaN% 或负距离；收藏分组已跳过 null 价格，后端排位契约为整数 0–100/None，生产可达性尚未证明，需另行核查，不计新增已证实缺陷。
 - **属性的「最好」与「必须」在排序里没有区别**(2026-09-24 发现,未修)。解析会记录 `strength: preferred/required`,但 `graph.rank` 对所有 `abstract_needs` 都按 `min_score` 硬筛选,「最好热闹」与「必须热闹」在首轮筛选时效果相同。(多轮相对调整已区分:只有推断且非「必须」的反向门槛会自动让步,见 `refinement.relaxable_need`;首轮筛选仍未区分。)
@@ -152,9 +146,6 @@ Chrome(无头 Chrome 加 `--use-angle=d3d11` 可用)或所有者自己的浏览�
   `design/white-city-try/` 那条实时光照路线，由另一个 Agent 维护，不要替它改。
   另注：`city-13-smooth.glb` 本身**不在仓库里**（只剩 `blender/city-13-smooth.blend`
   与几份导出 json），真要走这条路得先重新导出。
-- **首屏沙盘的约 19MB 资产要不要入库,未决。** `app/web/showroom/` 现在是未跟踪文件
-  (GLB 16.4MB + 贴图)。不入库则换机器要重跑一次约 25 分钟的烘焙才能看到首屏;
-  入库则仓库变大。等所有者决定,与基线 push 那条一起考虑。
 - **首屏沙盘只做了宽屏(≥900px)。** 窄屏走 SVG 回退。移动端构图由所有者明确延后,
   不是遗漏。低端 GPU / 集显上的帧率与显存占用**未测**。
 - **城市视角靠"整组隐藏户型样板"规避穿帮,不是模型里真的分开了。** 两组模型在
@@ -166,20 +157,11 @@ Chrome(无头 Chrome 加 `--use-angle=d3d11` 可用)或所有者自己的浏览�
   仍遵守 `docs/DECISIONS.md` 的可见基线规则:动画结束与否都不能让文字永久隐形。
 - **本机内存不稳定,Python 进程随机崩溃、可能悄悄写坏生成的数据**(审计 BUG-16,未解决)。同一段纯 Python 压力测试在 3.14 与 3.11 上都出现内存损坏,系统日志同期有 Windows 服务崩溃;`tests/test_api.py` 的偶发段错误很可能同源。重跑数据管线后要核对输出(离折估值已带回读自检)。建议跑 Windows 内存诊断 / MemTest86。**2026-09-24 明显加重**:只用标准库逐行读 `data/osm_points.csv`(文件完好:无空字节、UTF-8 合法、9-15 后未改)的最小进程 3 次崩 2 次;`tests/test_context.py` 连续 5 次崩在同一读文件处,`tests/test_api.py` 3 次里 2 次段错误、另有 1 次出现一次性且不可重现的 `ValueError`。测试失败先按此排查,再怀疑代码。
 - 数据审计首轮 13 条问题 + 修复中新发现的 4 条已全部修复(含原「估值对训练时见过的房源偏乐观」),详情与回归测试见 `eval/audit/BUGS.md`。
-- **基线提交已完成但尚未 push**(本地 `e382140`,97 个文件)。`data/planning.jsonl.gz`
-  有 71MB,超过 GitHub 50MB 警告线(硬上限 100MB),一旦推送就固化进历史,
-  之后只能改写历史才能移除。push 前需所有者确认这一点。
-- **`docker compose up -d` 目前会把库搞乱,不要直接跑。** 带 compose 标签的是
+- **本机 `docker compose up -d` 目前会把库搞乱,不要直接跑**(只影响所有者这台机器;组员的全新环境正常)。 带 compose 标签的是
   那个**已退出的** `capstone_postgres_old5432`;正在跑的 `capstone_postgres` 是手工
   `docker run` 起的,没有标签。compose 会重建 old5432 当作 `db` 服务,同时把在跑的
   容器改名让路,两者争同一个 15432 端口。数据在具名卷 `capstone_pgdata` 里,两个容器
   共用,清理不会丢数据 —— 但清理动作(删掉这两个容器、让 compose 重新接管)未做。
-- **非 UTF-8 控制台下服务起不来。** `app/api/server.py:102` 启动时打印 `R²`,
-  在 GBK 控制台(中文 Windows 的 cmd 默认 cp936)抛 `UnicodeEncodeError`,
-  直接打死 lifespan。本机 PowerShell 是 UTF-8 所以看不到;组员的 cmd 会踩。
-  **Agent 跑测试也会踩**:2026-09-21 在 Claude Code 的 Bash 工具(GBK 子进程)下
-  `tests/test_api.py` 因此失败,加 `PYTHONIOENCODING=utf-8` 后八个测试全部通过。
-  绕过:`PYTHONIOENCODING=utf-8`;根治见 TODO Next。
 - `tests/test_api.py` 偶发失败(批量连跑时约 1/24,曾表现为 rc=139 段错误),
   单独重跑无法复现。用 `PYTHONFAULTHANDLER=1` 捕获。
 - **未做:与纯 LLM 对比的幻觉率评估。** 提案里承诺过,前提已经具备。
@@ -191,15 +173,14 @@ Chrome(无头 Chrome 加 `--use-angle=d3d11` 可用)或所有者自己的浏览�
 - 假设是**进程级**的:一个人改了所有人都变。单机演示没问题,多人同时用需要把它
   挪进会话状态。
 - 会话存在内存里(`MemorySaver`),重启服务即丢失。
-- `README.md` 正文仍是 Member B 早期的「数据 + 检索」那一版,把 `search.py` 说成
-  交付物 —— 助手本体现在在 `app/`。顶部已加指引,但正文尚未重写。
+- **公开仓库没有 LICENSE**,是否添加待所有者决定(见 TODO Next)。
+- **选中房源的图钉样式未定**:黄色颜料已撤,现为中性光晕。
 
 ## Next Steps
 
-1. 所有者在真实浏览器里验收首屏沙盘(河面颜色、词条轮换、转场、低端 GPU 帧率)与
-   多轮修改(热闹→安静),并决定约 19MB 沙盘资产是否入库
-2. 决定基线 push 方式、清理 Docker 容器归属(见 TODO Now)
-3. 修复非 UTF-8 启动输出、收敛 DSN 配置并开展幻觉率评估(见 TODO Next)
+1. 所有者在真实浏览器里验收首屏沙盘、多轮修改(热闹→安静)与新地图面板,并定选中图钉样式
+2. 内存诊断(BUG-16);清理本机 Docker 容器归属(见 TODO Now)
+3. 收藏上地图;决定 LICENSE;幻觉率评估(见 TODO Next)
 4. 明确延后的两项:电车噪音源、顶栏「假设」按钮改名 + 中英文标点统一
 
 ## Important Constraints
@@ -212,5 +193,7 @@ Chrome(无头 Chrome 加 `--use-angle=d3d11` 可用)或所有者自己的浏览�
 - **不要为了"修数据"去改数据集** —— 组员会重新下载覆盖。要改就改标签、特征或展示。
 - 界面上**决定"看不看得见"的属性,不许依赖动画或过渡**。
 - `.env` 里有真实 LLM key,已 gitignore,保持如此。
-- `data/` 大部分不入库,可由 `pipeline/` 脚本重建,顺序见 `README.md` 与
-  `NOTES_FOR_SUPERVISOR.md` 的「如何重建全部数据」。
+- `data/` 大部分不入库,可由 `pipeline/` 脚本重建,顺序见 `docs/en/DEVELOPMENT.md` 与
+  `NOTES_FOR_SUPERVISOR.md` 的「如何重建全部数据」。房源库由 `db/seed/properties.dump` 提供,
+  重跑管线后要重新导出种子。
+- 仓库是**公开**的:任何入库内容都对外可见,提交前做密钥扫描。

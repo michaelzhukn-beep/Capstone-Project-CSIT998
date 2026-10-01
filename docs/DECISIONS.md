@@ -330,3 +330,57 @@ FastAPI 的 `title`。
 
 **Consequences.** 重烘台座或河道后必须重跑 `make_water_masks.py`(遮罩与贴图同一套 UV)。
 比较两张取景不同的图时**不要按位置取样**:2026-09-24 就因此得出过「用户浏览器渲染偏深」的错误结论。
+
+---
+
+## Decision: 印花税用 2016–2018 的历史税率表,半元向下取整
+
+**Context.** 现行维州税率表 2021-07-01 起多了「超过 $200 万:$110,000 + 6.5%」一档。代码里没有这一档,
+看起来像漏了(2026-10-01 复查时差点被当成 bug 补上)。另一个疑点是半元的舍入:原代码用 `round()`(银行家舍入)。
+
+**Decision.** 税率表**保持四档历史表**(2008-05-06 至 2021-06-30 的合同适用),不加 $200 万档;
+取整按 *Duties Act 2000* s 28(1):取最近的整元,**恰好 .50 时取较低整元**,以千分之一元为单位整数精确计算。
+
+**Reason.** 数据集成交期是 2016-01 至 2018-03,完全落在历史表的适用期内,用现行表反而时间口径不自洽。
+半元向下的措辞在 2000 年原始文本(No. 79/2000)和现行授权版 v141 里一致,所以整个成交期都适用。
+`round()` 在整数部分为奇数时会多算 1 元;浮点下本该恰好 .50 的金额还可能算成 .4999…。
+
+**Consequences.** 全库 20,800 套里 134 套税额变化,每套最多差 $1;`roi_certified_prefix` 的
+「取整误差 ≤ 0.5」前提不变。**若改用 2021-07 之后的成交数据,必须同时换表**(见 `formulas.py` 注释)。
+`stamp_duty_vic` 不能依赖模块级 import:ROI 离线测试用 AST 单独抽出它执行。
+
+---
+
+## Decision: 地图底图用 OpenFreeMap 矢量瓦片 + MapLibre GL,栅格瓦片只作退回
+
+**Context.** 所有者要求地图做成参考稿那种毛玻璃浅色质感(白路、浅灰地、淡绿地与灰蓝水面)。
+OSM 标准栅格瓦片的配色烤死在图片里:粉色干道、路牌编号、密集住宅网格,CSS 滤镜只能整体褪色,
+试过四组参数都达不到。CARTO 的浅色底图现在要求 API key(瓦片直接返回 "API KEY REQUIRED")。
+
+**Decision.** 底图改为 OpenFreeMap(OSM 数据、免 key、免注册)的 positron 矢量样式,由 `map-glass.js`
+在客户端逐图层改色、隐藏路牌,经 maplibre-gl-leaflet 挂进 Leaflet;图钉、取景、测距仍全在 Leaflet。
+没有 WebGL、CDN 或样式取不到时自动退回 OSM 栅格瓦片(带浅色滤镜)。库懒加载,首页不付这约 800KB。
+
+**Reason.** 质感要求只有矢量样式能满足;保留 Leaflet 避免重写图钉/测距/详情联动;退回路径保证
+地图永远有底图。
+
+**Consequences.** 署名必须同时写 OpenFreeMap / OpenMapTiles / OSM(ODbL)。配色在 `map-glass.js` 的
+`C` 表里改,不要再给矢量画布加 CSS 滤镜(滤镜只作用于 `.osm-raster`)。依赖 tiles.openfreemap.org 在线。
+
+---
+
+## Decision: 公开仓库的发布范围
+
+**Context.** 所有者要求组员下载即可运行,仓库公开。阻碍有三:房源库要从 Kaggle 下载 + 10–30 分钟生成向量;
+首屏沙盘资产约 19MB;`design/white-city*` 约 2.8GB(.blend、烘焙产物)。
+
+**Decision.** 入库 `db/seed/properties.dump`(约 78MB,只含 properties 表与向量,不含账号/收藏)和
+一键脚本 `db/setup_db.py`;入库 `app/web/showroom/` 资产;`design/white-city*` 只放行文本源码,
+二进制留本机。组员入口是英文的 `README.md` + `docs/en/*`;`docs/*` 共享状态文档仍用中文。
+`.env`、`_local_backups/`、`.codex/`、`.claude/` 永不入库。
+
+**Reason.** 种子把「能跑起来」从一小时缩到一分钟,且与评估所用数据完全一致;Kaggle 数据集为
+CC BY-NC-SA 4.0,允许署名、非商业、相同方式共享的再分发(README 已注明)。
+
+**Consequences.** 重跑数据管线后要重新导出种子(命令在 `db/setup_db.py` 文件头)。大文件一旦推送
+就固化在历史里,`planning.jsonl.gz`(74MB)与种子都接近 GitHub 100MB 单文件上限,新增大文件前先考虑 LFS。

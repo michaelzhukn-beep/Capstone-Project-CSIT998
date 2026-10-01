@@ -13,9 +13,8 @@ import torch
 from pgvector.psycopg2 import register_vector
 from sentence_transformers import SentenceTransformer
 
-# 端口与 db/docker-compose.yml 一致(宿主 15432 -> 容器 5432)。
-# 此处仍是硬编码,app/ 已改为从 app.core.config 读取;见 TODO。
-DB_DSN = "postgresql://capstone:capstone@localhost:15432/capstone"
+from app.core.config import DB_DSN  # 和服务端同一份 .env,不再硬编码
+
 MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 
 _model = None

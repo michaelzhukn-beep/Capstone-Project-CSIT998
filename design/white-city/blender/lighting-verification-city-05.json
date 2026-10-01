@@ -1,0 +1,161 @@
+{
+  "stage": "experimental lighting refinement, visual acceptance pending",
+  "source": "city-04.blend",
+  "source_sha256": "66fbd12dc612bd7d6c9f1f3b2633d29bb5cbe407af4153e22e93de87d7bddb91",
+  "geometry_unchanged": true,
+  "geometry_sha256": "8828e4ee73b912358bb1371a8f6871aebdf42f5308c147dc337fea4ee1cbd78e",
+  "reference_camera": {
+    "id": "river-oblique-2026-09-15",
+    "description": "按参考图屋顶与基座位置拟合的斜向低机位；灯光对比与巡游沿用此朝向。不是逐像素相机标定。",
+    "position": [
+      -185.4913,
+      51.0202,
+      251.5698
+    ],
+    "target": [
+      13.5907,
+      12.3485,
+      -69.788
+    ],
+    "verticalFov": 30.1523,
+    "referenceAspect": 1.8091872792,
+    "near": 0.2,
+    "far": 2200
+  },
+  "blender_camera": {
+    "position": [
+      -185.49130249023438,
+      -251.56979370117188,
+      51.020198822021484
+    ],
+    "lens": 44.547698974609375,
+    "sensor_fit": "VERTICAL",
+    "shift_x": 0.0,
+    "shift_y": 0.0
+  },
+  "image_texture_nodes": 0,
+  "samples": 128,
+  "resolution": [
+    2560,
+    1415
+  ],
+  "rendered": [
+    "reference-lighting-04",
+    "reference-lighting-05",
+    "waterfront-lighting-04",
+    "waterfront-lighting-05"
+  ],
+  "lights": [
+    {
+      "name": "003 pavilion recessed interior",
+      "type": "AREA",
+      "power": 160.0,
+      "color": [
+        1.0,
+        0.8299999833106995,
+        0.6100000143051147
+      ],
+      "size": 15.600000381469727
+    },
+    {
+      "name": "005 pavilion recessed interior",
+      "type": "AREA",
+      "power": 160.0,
+      "color": [
+        1.0,
+        0.8299999833106995,
+        0.6100000143051147
+      ],
+      "size": 16.899999618530273
+    },
+    {
+      "name": "007 pavilion recessed interior",
+      "type": "AREA",
+      "power": 160.0,
+      "color": [
+        1.0,
+        0.8299999833106995,
+        0.6100000143051147
+      ],
+      "size": 18.850000381469727
+    },
+    {
+      "name": "009 pavilion recessed interior",
+      "type": "AREA",
+      "power": 160.0,
+      "color": [
+        1.0,
+        0.8299999833106995,
+        0.6100000143051147
+      ],
+      "size": 18.850000381469727
+    },
+    {
+      "name": "012 tower recessed interior",
+      "type": "AREA",
+      "power": 89.5999984741211,
+      "color": [
+        1.0,
+        0.8299999833106995,
+        0.6100000143051147
+      ],
+      "size": 9.75
+    },
+    {
+      "name": "019 pavilion recessed interior",
+      "type": "AREA",
+      "power": 160.0,
+      "color": [
+        1.0,
+        0.8299999833106995,
+        0.6100000143051147
+      ],
+      "size": 19.5
+    },
+    {
+      "name": "025 pavilion recessed interior",
+      "type": "AREA",
+      "power": 160.0,
+      "color": [
+        1.0,
+        0.8299999833106995,
+        0.6100000143051147
+      ],
+      "size": 20.149999618530273
+    },
+    {
+      "name": "Cool broad fill",
+      "type": "AREA",
+      "power": 38000.0,
+      "color": [
+        0.9100000262260437,
+        0.949999988079071,
+        1.0
+      ],
+      "size": 145.0
+    },
+    {
+      "name": "Large soft daylight key",
+      "type": "AREA",
+      "power": 440000.0,
+      "color": [
+        1.0,
+        0.9800000190734863,
+        0.9449999928474426
+      ],
+      "size": 105.0
+    },
+    {
+      "name": "Soft daylight direction",
+      "type": "SUN",
+      "power": 0.2800000011920929,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "size": null
+    }
+  ],
+  "limits": "Cycles comparison is offline. WebGL uses filtered shadows, screen-space AO and local area fill; no baked GI."
+}

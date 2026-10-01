@@ -19,11 +19,19 @@
                                       │        ├── 指标   app/analytics/formulas.py + assumptions.py
                                       │        └── 环境   app/amenities/*            → data/ 快照
                                       │
+                                      ├── 账号与收藏 app/auth/*               → Postgres(users/sessions/favorites)
                                       └── 标签翻译 app/i18n.py
 ```
 
 外部依赖只有两个:**Postgres + pgvector**(Docker,15432)和一个 **OpenAI 兼容的 LLM
-端点**(当前 DeepSeek)。地图瓦片要联网,其余功能全部离线可跑。
+端点**(当前 DeepSeek,换供应商只改 `.env`,见 `docs/en/CONFIGURATION.md`)。
+地图底图与前端库(Leaflet、MapLibre GL、three.js)走 CDN / 在线瓦片,其余功能全部离线可跑。
+
+**新环境建库**:`docker compose -f db/docker-compose.yml up -d` → `python db/setup_db.py`。
+后者从 `db/seed/properties.dump`(pg_dump 自定义格式,只含 `properties` 表与向量,
+不含任何账号/收藏)恢复 20,800 条房源,再跑 `db/schema.sql` 补其余表;可重复执行。
+种子要和数据管线产物保持一致:重跑 `pipeline/load_properties.py` 后按 `db/setup_db.py`
+文件头的命令重新导出。
 
 ## 目录职责
 
@@ -35,15 +43,18 @@
 | `app/search/search.py` | 语义检索 + SQL 硬条件。嵌入模型在进程内。 |
 | `app/analytics/` | `valuation`(XGB 推理)、`train_valuation`(训练)、`formulas`(投资公式)、`assumptions`(可调假设 + 边界) |
 | `app/amenities/` | `registry`(数据源与属性的唯一注册表)、`context`(证据 → 分数)、`nearby`(设施/地名/距离)、`planning`、`zones`、`suburb_stats` |
+| `app/auth/` | 账号(`passwords` scrypt、`store` 用户/会话表、`routes` `/api/auth/*`,登录失败限流)与收藏(`favorites` `/api/favorites/*`,快照只存事实字段,不对 properties 建外键) |
 | `app/i18n.py` | **服务端标签**的英文版 + `check()` 完整性自检 |
-| `app/web/` | 单页前端:`index.html` / `app.js` / `app.css` / `i18n.js`。无构建步骤。 |
-| `app/web/showroom/` | 首屏白模沙盘:`showroom.mjs`(唯一的代码文件)+ 烘焙好的 GLB、贴图、相机 JSON。资产约 19MB,**目前未入库** |
+| `app/web/` | 单页前端:`index.html` / `app.js` / `app.css` / `i18n.js`,外加 `auth.js`(登录注册弹窗)、`favorites.js`(收藏心与抽屉)、`map-glass.js`(毛玻璃矢量底图)。无构建步骤。 |
+| `app/web/showroom/` | 首屏白模沙盘:`showroom.mjs`(唯一的代码文件)+ 烘焙好的 GLB、贴图、相机 JSON。资产约 19MB,已入库 |
+| `db/` | `docker-compose.yml`(pgvector/pg16,15432)、`schema.sql`、`setup_db.py`(一键建库)、`seed/properties.dump`(房源种子) |
+| `docs/en/` | 给组员的英文指南:功能、配置(换 LLM)、开发、排错。与根目录 `README.md` 一起是对外入口 |
 | `pipeline/` | 一次性数据抓取与基准构建脚本 |
 | `eval/` | 幻觉率评估与词汇覆盖评估 |
 | `tests/` | 纯脚本测试,`python tests/test_x.py` |
 | `_ui-lab/` | **experimental** — 另一套备用前端,自带 8080 服务并把 `/api/*` 反代到主站。**不碰 `app/`**,未集成 |
 | `design/`、`qisuo-redesign/` | 设计稿,非线上代码 |
-| `design/white-city/` | 首屏沙盘的**制作端**:`blender/*.py` 是建模/烘焙/后期/导出脚本(源码),`*.md` 是实验记录与复盘。其余是渲染产物、`.blend` 与历史实验页(v3–v24 实时光照路线,已不是主路径)。**整个目录 2.2GB,不要整目录入库** |
+| `design/white-city/` | 首屏沙盘的**制作端**:`blender/*.py` 是建模/烘焙/后期/导出脚本(源码),`*.md` 是实验记录与复盘。其余是渲染产物、`.blend` 与历史实验页(v3–v24 实时光照路线,已不是主路径)。**整个目录约 2.5GB;`.gitignore` 只放行文本源码(.py/.mjs/.js/.html/.md)和测试要用的 `city-04-assets.json`,二进制留在本机** |
 | `_rhine_analysis/` | **与本项目无关**,见 PROJECT_STATE 的 Known Issues |
 
 ## 请求流(一次提问)
@@ -73,6 +84,9 @@
 | `POST /api/measure` | 解析地名 + 两点直线距离 | 否 |
 | `POST /api/recalc` | 按给定假设重算一套房的投资指标 | 否 |
 | `POST /api/assumptions` | 改**进程级**假设 | 否 |
+| `GET /api/property/{id}?lang=` | 按编号实时算一套房的详情(`graph.detail_metrics`:analyze → enrich → present),收藏与并排详情用 | 否 |
+| `POST /api/auth/register` · `login` · `logout`,`GET /api/auth/me` | 账号;会话令牌放 HttpOnly `nw_session` Cookie,库里只存 sha256 | 否 |
+| `GET/PUT/DELETE /api/favorites[/{property_id}]` | 收藏(需登录);PUT 时服务端从 properties 取快照 | 否 |
 | `GET /` + `/static/*` | 单页前端,带 `Cache-Control: no-cache` | 否 |
 
 ## 多轮修改(「再便宜点」「再安静一点」)
@@ -193,6 +207,18 @@ design/white-city/blender/
 
 单页,无构建。`app.js` 一个 IIFE,内部按区块组织:状态 → 工具 → 对话 → 条件卡 →
 结果卡 → 地图 → 详情窗 → 首屏 SVG 城市与立面词条 → 语言切换 → 启动。
+
+`auth.js`、`favorites.js` 与 `app.js` 不互相引用,只通过 window 事件与少量全局通信:
+`nw:lang`(切语言)、`nw:auth`(登录状态变化)、`nw:detail`(详情打开/关闭,带房源 id 或
+令牌与 `user` 标记,用于「关闭详情回到收藏抽屉」);全局 `nwAuth`、`nwFav`、`nwOpenDetail`、
+`nwCompareIds`。并排详情(最多 3 列、按段对齐、只看不同、最优标记)在 `app.js` 的 compare 区块。
+
+地图:Leaflet 负责图钉、取景、测距;底图由 `map-glass.js` 懒加载 MapLibre GL +
+maplibre-gl-leaflet,用 OpenFreeMap 的 positron 矢量样式逐图层改色后挂进 Leaflet 的瓦片层;
+没有 WebGL 或 CDN/样式取不到时退回 OSM 栅格瓦片(带浅色滤镜)。面板是「一整块厚玻璃」:
+`.map-frost`(四周 backdrop-filter 磨砂,左侧最厚)+ `.map-glass`(边缘斜面光与高光),
+二者都 `pointer-events:none`;取景内边距与磨砂宽度一致,房源落在中间通透区。
+选中房源只给图钉加中性光晕(原黄色颜料已撤,最终样式待所有者定)。
 
 首屏背景有两套,互为回退:宽屏(≥900px)且资产加载成功时用 `showroom.mjs` 的白模沙盘,
 否则用 `app.js` 里 `drawCity()` 生成的 SVG 城市。切换由 `<div id="app">` 上的

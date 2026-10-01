@@ -9,22 +9,15 @@
 
 ## Now
 
-- [ ] **所有者在真实浏览器里验收首屏沙盘与多轮修改。** 页面回归通过不等于视觉验收。
-      沙盘:河面颜色(按效果图调)、40 条词条轮换、转场/视差时文字贴板、树旁细节、低端 GPU 帧率。
-      多轮修改:「热闹点的两房公寓」后连说「再安静一点」,看两个分数怎么变、门槛让步说明是否清楚。
-      注意 Browser 面板没有 WebGL,看不到沙盘。
-- [ ] **跑 Windows 内存诊断 / MemTest86**(BUG-16)。2026-09-24 连只读 CSV 的最小 Python 进程都
-      3 次崩 2 次,测试结果因此不可靠;硬件问题排除前,段错误类失败不要当成代码问题去改。
-- [ ] **决定 `app/web/showroom/` 的约 19MB 资产是否入库**(GLB 16.4MB + 贴图,
-      现在是未跟踪文件)。不入库则换机器要重跑约 25 分钟烘焙;入库则仓库变大。
-      与下面的基线 push 一起决定。
-- [ ] **决定基线提交要不要 push。** 本地已提交 `e382140`(97 文件)。
-      卡点:`data/planning.jsonl.gz` 71MB,过 GitHub 50MB 警告线,推上去就进历史,
-      移除要改写历史。选项:照推 / 改用 Git LFS / 把它移出白名单由脚本重建。
-- [ ] **清理 Docker 容器归属。** 现在 `docker compose up -d` 会重建那个已退出的
-      `capstone_postgres_old5432` 当 `db`,并把在跑的手工容器改名让路,两者争 15432。
-      要做的是:停掉并删除这两个容器,用 compose 重新拉起(卷 `capstone_pgdata`
-      共用,不丢数据),再验证 `python serve.py` 能连上。
+- [ ] **所有者在真实浏览器里验收首屏沙盘、多轮修改与新地图。** 页面回归通过不等于视觉验收。
+      沙盘:河面颜色、40 条词条轮换、转场/视差、低端 GPU 帧率。多轮修改:「热闹点的两房公寓」后连说
+      「再安静一点」。地图:厚玻璃面板质感、左侧磨砂厚度、缩放(Browser 面板里地图不能缩放)。
+- [ ] **选中房源时图钉的最终样式待所有者定。** 黄色颜料已撤,现在只是中性光晕(`.pin.on`)。
+- [ ] **跑 Windows 内存诊断 / MemTest86**(BUG-16)。2026-10-01 提交时 git 报一个松散对象损坏
+      (内容与工作区文件一致,已用 `git hash-object -w` 重建,fsck 通过),与内存不稳定吻合。
+      硬件问题排除前,段错误/损坏类失败不要当成代码问题去改。
+- [ ] **清理本机 Docker 容器归属。** 本机 `docker compose up -d` 仍会和手工起的 `capstone_postgres`
+      冲突(见 PROJECT_STATE)。组员的新环境不受影响(全新 compose + `db/setup_db.py` 已实测)。
 
 ## Next
 
@@ -37,16 +30,14 @@
 - [ ] **补车位真实语言/服务证据**:v4意图与记录生命周期已合入并通过主源码47/17及真实前端合成Chrome中英29/29；继续只在授权额度/环境下评估实际LLM解析/生成、未识别说法及混合歧义，不宣称有限正则覆盖所有语言。真实模型/PG/数据口径仍未验证，旧库映射/迁移/回填取消。见 docs/MERGE_PARKING_INTENT_V4_2026-10-01.md。
 - [ ] **真实数据/数据库复测 WAVE04**:核查 price<=0 与全候选价格可疑的实际发生率，验证价格 SQL 在 PostgreSQL 中的候选顺序和提示文案；本轮只有合成输入及内存 SQL。
 - [ ] **真实模型复测租金来源解释**:提示词已按五种 `rent_source` 修正；目前只证实静态规则与模拟负载,真实 LLM 遵守情况和首轮解析回归未验证。
+- [ ] **收藏上地图**:所有者已定「对比和地图下一步考虑」,并排详情已做,收藏夹在地图上显示待做。
+- [ ] **仓库许可证未定**:公开仓库目前没有 LICENSE(默认保留所有权利,组员可下载使用,他人无复用授权)。
+      数据另有各自许可(见 README)。需所有者决定是否加。
 - [ ] **首轮筛选区分「最好」与「必须」**:`rank` 对所有 `abstract_needs` 都硬筛选,`strength` 只在
       多轮让步时用到(见 PROJECT_STATE Known Issues)。要先定「最好」是软排序还是较低门槛。
 - [ ] 运行 `tests/test_result_history_browser.mjs`(需 `CONVERSATION_FIXTURE`),确认历史回答的
       房源编号不再错指新一轮房卡,再从 Known Issues 删掉那一条
 
-- [ ] `app/api/server.py:102` 启动打印 `R²`,GBK 控制台下抛 `UnicodeEncodeError`
-      打死 lifespan(组员用 cmd 会踩,Agent 用 Bash 工具跑 `tests/test_api.py` 也会踩)。
-      让启动输出对非 UTF-8 终端安全。在那之前跑测试前面加 `PYTHONIOENCODING=utf-8`。
-- [ ] `search.py` 与 `pipeline/load_properties.py` 的 DSN 仍是硬编码(端口已跟进到
-      15432)。改成从 `app.core.config` 读,消掉这两处副本。
 - [ ] **幻觉率评估:本系统 vs 纯 LLM。** 提案里承诺过,不能砍。前提已具备:
       `python -m eval.run_eval`(要 LLM,约 20 分钟);`--report` 可只重出报告。
 - [ ] `tests/test_api.py` 偶发失败定位(批量连跑约 1/24)。
@@ -59,10 +50,20 @@
 - [ ] 假设从进程级挪进会话状态(多人同时使用才需要)
 - [ ] `MemorySaver` 换成 `SqliteSaver`,让会话跨重启存活(图本身不用改)
 - [ ] 决定 `_rhine_analysis/` 的去留(与本项目无关,约 9MB;删除前需所有者确认)
-- [ ] 重写 `README.md` 正文:它仍停在 Member B 的数据/检索那一版,
-      把 `search.py` 说成交付物,没提 `app/`
 
 ## Done
+
+- [x] **仓库对外发布(2026-10-01)**:推送到所有者的公开仓库 https://github.com/michaelzhukn-beep/Capstone-Project-CSIT998。英文 `README.md` +
+      `docs/en/`(功能、配置/换 LLM、开发、排错),`.env.example` 带各家 LLM 现成配置;
+      `db/seed/properties.dump` + `db/setup_db.py` 一键建库。实测:全新克隆 + 全新 venv 安装依赖 +
+      独立临时 Postgres 容器 → 建库 7.5 秒、20,800 条、服务启动并完成一次真实提问。密钥扫描 0 命中。
+- [x] **地图毛玻璃厚玻璃面板**:OpenFreeMap 矢量底图(栅格退回)、MAP.VIEW/坐标/城市选择/计数、
+      右下控制条、四周磨砂(左侧最厚)、边缘斜面光;黄色颜料撤掉。**视觉验收在 Now**
+- [x] **印花税半元向下取整**(Duties Act 2000 s 28(1),历史四档表不变,见 DECISIONS);134 套差 $1
+- [x] **GBK 控制台启动输出安全**(`server._say`)与 **DSN 收敛**(`load_properties.py` 读 `.env`)
+- [x] **登录注册 / 收藏 / 并排详情**:居中毛玻璃弹窗;卡片心形收藏、抽屉分组与搜索、
+      收藏打开实时详情并可回到抽屉;并排最多 3 列、按段对齐、只看不同、最优标记
+- [x] 过时测试 `tests/test_search_price_order_offline.py` 适配 WAVE08(ROI 项由代码生成)
 
 - [x] **G3-002本轮快照描述**:server done不再用轮后全局值，旧metrics/无快照兼容、回滚保留；公共describe(snap)不改全局。主源码51/51、Chrome中英114/114及30/65回归通过；两项完成即暂停，清单与证据已保存。
 
