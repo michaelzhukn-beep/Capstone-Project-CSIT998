@@ -6,6 +6,10 @@ rapidfuzz==3.14.5
 
 # Embedding model + database (search.py, pipeline/load_properties.py)
 sentence-transformers==6.0.1
+# Pinned: nomic-embed-text-v1.5's remote model code calls get_extended_attention_mask,
+# which transformers 5.18 removed -- a fresh install then fails at the first search with
+# "'NomicBertModel' object has no attribute 'get_extended_attention_mask'". 5.16.1 is verified.
+transformers==5.16.1
 psycopg2-binary==2.9.12
 pgvector==0.5.0
 
