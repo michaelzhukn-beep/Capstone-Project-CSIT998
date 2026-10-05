@@ -701,7 +701,8 @@
       (required ? c1 : c2).appendChild(score);
     });
     g1.classList.toggle('no-active', !c1.querySelector('.hard'));
-    (p.amenity_needs || []).forEach((need, i) => { soft++; c2.appendChild(chip(T.distChip(kindZh(need.kind), dist(need.max_distance_m)), { icon: 'location',
+    // 设施距离:默认「优先」(不剔除远的),明说「必须」的才进必须组 —— 分组和排序时的实际行为一致
+    (p.amenity_needs || []).forEach((need, i) => { const req = need.strength === 'required'; if (!req) soft++; (req ? c1 : c2).appendChild(chip(T.distChip(kindZh(need.kind), dist(need.max_distance_m)), { icon: 'location', cls: req ? 'hard' : '',
       onClick: () => editNumber(T.distTitle(kindZh(need.kind)), need.max_distance_m, T.metres, val => apply(n => { n.amenity_needs[i].max_distance_m = val; })),
       onRemove: () => apply(n => { n.amenity_needs.splice(i, 1); }) })); });
     if (p.near_place) { soft++; const np = p.near_place; c2.appendChild(chip(T.nearPlaceChip(np.name, np.max_distance_m ? dist(np.max_distance_m) : ''), { icon: 'location',
@@ -799,8 +800,9 @@
     item(T.addAmenity, () => openPopover(T.addAmenity, [
       { label: T.addAmenityKind, type: 'select', value: 'train_station', options: meta.kinds },
       { label: T.addAmenityMeters, type: 'number', value: 1500, min: 100, max: 20000, step: 100, required: true },
-    ], ([kind, m]) => apply(n => {
-      n.amenity_needs = [...(n.amenity_needs || []).filter(x => x.kind !== kind), { kind, max_distance_m: Math.round(Number(m)) }];
+      { label: T.addStrength, type: 'select', value: 'preferred', options: { preferred: T.preferredShort, required: T.requiredShort } },
+    ], ([kind, m, strength]) => apply(n => {
+      n.amenity_needs = [...(n.amenity_needs || []).filter(x => x.kind !== kind), { kind, max_distance_m: Math.round(Number(m)), strength }];
     })));
     const freeAttrs = Object.fromEntries(Object.entries(meta.attributes || {}).filter(([k]) => !(p.abstract_needs || []).some(x => x.attribute === k)));
     if (Object.keys(freeAttrs).length) item(T.addPreference, () => openPopover(T.addPreference, [
@@ -1830,7 +1832,8 @@
     // 土地 / 建筑面积:数据集记录值。0 是没记录(公寓近一半是 0),不显示,免得读成「没有土地」。
     const area = v => (typeof v === 'number' && v > 0) ? Math.round(v).toLocaleString() : null;
     const metaItems = [T.beds(m.bedrooms), T.baths(m.bathrooms), typeZh(m), m.distance_cbd != null ? T.toCbd(m.distance_cbd) : null,
-      area(m.land_size) && T.landArea(area(m.land_size)), area(m.building_area) && T.buildingArea(area(m.building_area))].filter(Boolean);
+      area(m.land_size) && T.landArea(area(m.land_size)) + (m.area_suspect?.land ? T.areaSuspect : ''),
+      area(m.building_area) && T.buildingArea(area(m.building_area)) + (m.area_suspect?.building ? T.areaSuspect : '')].filter(Boolean);
     const metaLine = h('div', 'd-meta');            // 每一项整体换行:中文任意两字之间都能断,「土地」和「588 ㎡」会被拆到两行
     metaItems.forEach((x, i) => { if (i) metaLine.appendChild(document.createTextNode(' · ')); metaLine.appendChild(h('span', 'nowrap', x)); });
     l.appendChild(metaLine);

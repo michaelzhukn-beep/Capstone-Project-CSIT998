@@ -205,14 +205,14 @@ assumptions.set_rate("opex_rate", snap["opex_rate"])   # 还原
 # ---------------------------------------------------------------- V3:设施参数过闸
 
 p = _sanitize({"amenity_needs": [{"kind": "train_station", "max_distance_m": 800}]}, "x")
-assert p["amenity_needs"] == [{"kind": "train_station", "max_distance_m": 800}]
+assert p["amenity_needs"] == [{"kind": "train_station", "max_distance_m": 800, "strength": "preferred"}]   # 默认优先(2026-10-06)
 
 # 不在九类之内的设施直接丢掉,不猜
 assert _sanitize({"amenity_needs": [{"kind": "casino", "max_distance_m": 500}]}, "x")["amenity_needs"] is None
 # 提了设施但没说距离 -> 给默认值,而不是当成 0(0 会筛掉所有房源)
 got = _sanitize({"amenity_needs": [{"kind": "hospital"}]}, "x")["amenity_needs"]
-assert got == [{"kind": "hospital", "max_distance_m": 1500}]
-assert _sanitize({"amenity_needs": [{"kind": "hospital", "max_distance_m": 0}]}, "x")["amenity_needs"]     == [{"kind": "hospital", "max_distance_m": 1500}]
+assert got == [{"kind": "hospital", "max_distance_m": 1500, "strength": "preferred"}]
+assert _sanitize({"amenity_needs": [{"kind": "hospital", "max_distance_m": 0}]}, "x")["amenity_needs"]     == [{"kind": "hospital", "max_distance_m": 1500, "strength": "preferred"}]
 assert _sanitize({"amenity_needs": "不是数组"}, "x")["amenity_needs"] is None
 
 # 具名地点
@@ -266,18 +266,23 @@ out = enrich({"metrics": [dict(CITY)],
 assert out["place_lookup"]["error"], "找不到的地点必须报错,不能静默"
 assert out["metrics"][0]["near_place"] is None
 
-# 设施筛选:市区那套留下,远郊那套被筛掉
+# 设施筛选(明说「必须」):市区那套留下,远郊那套被筛掉
 enriched = enrich({"metrics": [dict(CITY), dict(FAR)],
                    "params": {"amenity_needs": [{"kind": "train_station", "max_distance_m": 1000}]}})["metrics"]
 out = rank({"metrics": enriched,
-            "params": {"amenity_needs": [{"kind": "train_station", "max_distance_m": 1000}]}})
+            "params": {"amenity_needs": [{"kind": "train_station", "max_distance_m": 1000, "strength": "required"}]}})
 assert [m["id"] for m in out["metrics"]] == [1]
 assert "要求距火车站 1000 米内" in out["ranking"]
 
 # 门槛严到一套不剩时:不返回违反条件的房源。
 out = rank({"metrics": enriched,
-            "params": {"amenity_needs": [{"kind": "train_station", "max_distance_m": 1}]}})
+            "params": {"amenity_needs": [{"kind": "train_station", "max_distance_m": 1, "strength": "required"}]}})
 assert out["metrics"] == [] and "同时满足" in out["ranking"]
+
+# 默认「优先」:远郊那套不剔除,只是排在市区那套后面,说明里写清是优先
+out = rank({"metrics": [enriched[1], enriched[0]],
+            "params": {"amenity_needs": [{"kind": "train_station", "max_distance_m": 1000}]}})
+assert [m["id"] for m in out["metrics"]] == [1, 2] and "优先距火车站 1000 米内" in out["ranking"]
 
 
 # ---------------------------------------------------------------- V4:抽象需求
@@ -328,33 +333,37 @@ Q = [{"id": 1, "context_scores": {"quiet": 90}, "price": 1},
      {"id": 4, "price": 4},                                    # 没算过环境分
      {"id": 5, "context_scores": {"quiet": 65}, "price": 5}]
 
-out = rank({"metrics": list(Q), "params": {"abstract_needs": [{"attribute": "quiet", "min_score": 60}]}})
+# 「必须」才硬筛(2026-10-06 起「最好/偏好」默认不剔除,只把达标的排前面)
+out = rank({"metrics": list(Q), "params": {"abstract_needs": [{"attribute": "quiet", "min_score": 60, "strength": "required"}]}})
 assert {m["id"] for m in out["metrics"]} == {1, 3, 5}
+pref = rank({"metrics": list(Q), "params": {"abstract_needs": [{"attribute": "quiet", "min_score": 60}]}})
+assert [m["id"] for m in pref["metrics"]][:3] == [1, 3, 5] and len(pref["metrics"]) == 5, pref["metrics"]
+assert "优先「安静」评分 ≥ 60" in pref["ranking"]
 assert "已筛出「安静」评分 ≥ 60 的" in out["ranking"]
 
 out = rank({"metrics": list(Q), "params": {"sort_by": "quiet"}})
 assert [m["id"] for m in out["metrics"]] == [1, 3, 5, 2], "应按安静分降序,没分的排除"
 
-# 门槛太高时明确没有兼容结果。
-out = rank({"metrics": list(Q), "params": {"abstract_needs": [{"attribute": "quiet", "min_score": 99}]}})
+# 门槛太高时明确没有兼容结果(下面这些测的是硬筛口径,一律用「必须」)。
+out = rank({"metrics": list(Q), "params": {"abstract_needs": [{"attribute": "quiet", "min_score": 99, "strength": "required"}]}})
 assert out["metrics"] == [] and "同时满足" in out["ranking"]
 
 # 明确比较符号必须影响结果,尤其 > / ≥、< / ≤ 在边界处不能混淆。
 for op, ids, symbol in (("gte", {1, 3}, "≥"), ("gt", {1}, ">"),
                         ("lte", {2, 3, 5}, "≤"), ("lt", {2, 5}, "<"), ("eq", {3}, "=")):
-    need = {"attribute": "quiet", "min_score": 70, "operator": op}
+    need = {"attribute": "quiet", "min_score": 70, "operator": op, "strength": "required"}
     for lang in ("zh", "en"):
         out = rank({"metrics": list(Q), "params": {"abstract_needs": [need]}, "lang": lang})
         assert {m["id"] for m in out["metrics"]} == ids, (op, out["metrics"])
         assert symbol + " 70" in out["ranking"]
 for op in ("lt", "eq"):
     out = rank({"metrics": list(Q), "params": {"abstract_needs": [
-        {"attribute": "quiet", "min_score": 0, "operator": op}]}})
+        {"attribute": "quiet", "min_score": 0, "operator": op, "strength": "required"}]}})
     assert out["metrics"] == [] and "已忽略" not in out["ranking"]
 edges = [{"id": 10, "context_scores": {"quiet": 0}}, {"id": 11, "context_scores": {"quiet": 100}}]
 for value, expected in ((0, 10), (100, 11)):
     out = rank({"metrics": edges, "params": {"abstract_needs": [
-        {"attribute": "quiet", "min_score": value, "operator": "eq"}]}})
+        {"attribute": "quiet", "min_score": value, "operator": "eq", "strength": "required"}]}})
     assert [m["id"] for m in out["metrics"]] == [expected]
 
 # 旧会话的互斥标记不再引发条件删除。

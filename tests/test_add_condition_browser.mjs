@@ -73,8 +73,8 @@ check('already-set filters are not offered', !items.includes(T.budgetMax) && !it
 check('unset filters are offered', [T.budgetMin, T.cbd, T.amenity, T.pref, T.plan].every(x => items.includes(x)));
 
 await pick(T.amenity);
-check('place-distance editor opens', await ev(`document.querySelectorAll('#popover select, #popover input').length === 2`));
-await fill(['primary_school', '1000']);
+check('place-distance editor opens (type, metres, how strict)', await ev(`document.querySelectorAll('#popover select, #popover input').length === 3`));
+await fill(['primary_school', '1000', 'required']);
 check('primary-school distance chip added', (await ev(chips)).some(t => /(小学|Primary school).*1(\.0)?\s*km|1000\s*m/i.test(t)), JSON.stringify(await ev(chips)));
 check('ranking note shows the new requirement', /小学|primary school/i.test(await ev(notes)));
 

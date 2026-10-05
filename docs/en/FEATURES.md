@@ -34,6 +34,12 @@ The assistant understands:
 | **Distance to a place type** | "within 800 m of a train station", "preferably close to a primary school" | straight-line distance from OpenStreetMap data; any phrasing of "close to <type>" becomes the same filter (default 1,500 m) |
 | **Distance to the CBD** | "within 20 km of the CBD" | straight-line km, the same number the detail panel shows |
 | **Lifestyle qualities** (15) | quiet, lively, convenient, shopping, green, beach access, transport, school access, medical, fitness, spacious, family-friendly, away from industry, low crime, away from cemeteries | scored 0–100 from real geographic evidence (percentile against the whole city) |
+
+**Preferred vs required.** Distance and lifestyle wishes ("near a station", "preferably quiet")
+are *preferred*: matching properties are listed first, others are not removed, and the ranking
+note says how many of the shown ones match. Say "must / only / no more than" and the condition
+becomes *required*: anything that fails it is removed. The condition card groups them the same way.
+Land and floor areas that contradict themselves in the source data are shown with *"record looks wrong"*.
 | **School zones / planning** | "in the X school zone", "no heritage overlay" | official catchment and planning-zone data |
 | **Exclusions** | "no airport noise", "avoid flood zones", "exclude anything with a bushfire overlay" | hard exclusion by risk-overlay category (airport noise, flood, bushfire, acquisition, contamination, erosion); "no" always means removed, never just "preferably" |
 | **Free description** | "renovated-looking period home" | semantic vector search over the listing descriptions |

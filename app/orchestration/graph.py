@@ -432,7 +432,9 @@ _PARSE_SYSTEM = """你是房产搜索的参数抽取器。把用户的中文或�
                    用户说"回报率 5% 以上"就填 0.05,说"至少 4 个点"填 0.04。
                    注意是**小数不是百分数**:5% 要写 0.05,不能写 5。
   amenity_needs  : 数组,用户对**某一类设施**的距离要求。没有就填 []。
-                   每项形如 {"kind": "...", "max_distance_m": 1000}
+                   每项形如 {"kind": "...", "max_distance_m": 1000, "strength": "preferred"}
+                   strength:默认 "preferred"(优先:近的排前面,远的仍保留);
+                   用户明说"必须 / 一定要 / 不能超过 / 只要 X 米内的"才填 "required"(超出的直接剔除)。
                    kind 只能是下面这些(从注册表生成,不要用清单外的值):
 @@AMENITY_KINDS@@
                    max_distance_m 是米。用户说"走路十分钟内"按 800 米算,
@@ -775,7 +777,9 @@ def _sanitize(raw: dict, user_query: str, *, preserve_property_parking=False,
         distance = item.get("max_distance_m")
         if isinstance(distance, bool) or not isinstance(distance, (int, float)) or distance <= 0:
             distance = 1500  # 用户提了这类设施但没说多远,给个合理默认值
-        needs.append({"kind": kind.strip(), "max_distance_m": int(distance)})
+        # 默认是「优先」:近的排前面,远的不剔除。只有明说「必须/一定/不能超过」才是 required(硬筛)。
+        strength = "required" if item.get("strength") == "required" else "preferred"
+        needs.append({"kind": kind.strip(), "max_distance_m": int(distance), "strength": strength})
     params["amenity_needs"] = needs or None
 
     wanted = []
@@ -1014,6 +1018,13 @@ def parse_intent(state: State) -> dict:
         try:
             previous = state.get("params") or {}
             changes = raw.get("changes")
+            if fresh and isinstance(changes, list):
+                # 第一句「最好安静一点」:模型因「一点」写成相对调整,可没有上一轮可比。
+                # 环境属性改成「优先 + 推断门槛 60」(和「安静的」同一个结果);价格等相对调整仍无从算起,照旧澄清。
+                changes = [{"action": "set", "field": c["field"], "source": c.get("source"),
+                            "value": {"min_score": 60, "operator": "gte", "strength": "preferred", "value_source": "inferred"}}
+                           if isinstance(c, dict) and c.get("action") == "relative" and c.get("field") in _ABSTRACT_KEYS
+                           and c.get("direction") == "increase" else c for c in changes]
             removed_property_parking = any(
                 isinstance(change, dict) and change.get("action") == "remove"
                 and change.get("field") == "unsupported_asks"
@@ -1264,6 +1275,7 @@ def analyze(state: State) -> dict:
             # 这个量级的差距才有讨论价值,不能拿 2% 的差就说"被低估"。
             "predicted_gap": (predicted - price) / price if price and predicted else None,
         })
+        metrics[-1]["area_suspect"] = area_suspect(metrics[-1])      # 面积记录自相矛盾的,页面标「记录值存疑」
     return {"metrics": metrics}
 
 
@@ -1458,6 +1470,43 @@ def _unmatched_refinement(state, notes, relative=False, hint=None):
             "ranking": ";".join([message] + notes), "turn_notice": None, "refinement_base": None}
 
 
+def _prefer_amenities(state: State, metrics: list[dict], notes: list[str], abstract: bool = True) -> list[dict]:
+    """「优先」的条件:设施距离(近车站、最好离小学近)和环境偏好(最好安静、热闹点的)。
+    不剔除不满足的,而是把满足的排到前面(2026-10-06 所有者决定:偏好是「优先考虑」,只有「必须」才硬筛)。
+
+    稳定排序:满足的「优先」条件越多越靠前,同样多的保持原有排序(相关度 / 价格 / 评分……)。
+    说明里写清是「优先」以及展示的这批里有几套满足 —— 不能让人以为全都满足。
+    abstract=False:相对调整那条路径,环境偏好仍按门槛处理,这里只管设施距离。"""
+    params = state.get("params") or {}
+    tests = []                                    # (满足判定, 说明中文, 说明英文)
+    for n in params.get("amenity_needs") or []:
+        if n.get("strength") == "required":
+            continue
+        label = _kind_label(state, n["kind"])
+        tests.append(((lambda n: lambda m: (((m.get("amenities") or {}).get(n["kind"]) or {}).get("distance_m") or 10**9)
+                       <= n["max_distance_m"])(n),
+                      f"优先距{label} {n['max_distance_m']} 米内", f"Preferred: nearest {label.lower()} within {n['max_distance_m']} m"))
+    if abstract:
+        for n in params.get("abstract_needs") or []:
+            if n.get("strength") == "required":
+                continue
+            symbol, compare = _SCORE_OPERATORS.get(n.get("operator", "gte"), _SCORE_OPERATORS["gte"])
+            label = _attr_label(state, n["attribute"])
+            tests.append(((lambda n, compare: lambda m: (v := (m.get("context_scores") or {}).get(n["attribute"])) is not None
+                           and compare(v, n["min_score"]))(n, compare),
+                          f"优先「{label}」评分 {symbol} {n['min_score']}",
+                          f"Preferred: “{label}” score {symbol} {n['min_score']}"))
+    if not tests or not metrics:
+        return metrics
+    ordered = sorted(metrics, key=lambda m: -sum(ok(m) for ok, _, _ in tests))
+    shown = ordered[:RESULT_LIMIT]
+    for ok, zh, en in reversed(tests):
+        hit = sum(ok(m) for m in shown)
+        notes.insert(0, _t(state, f"{zh}(不剔除未达到的;展示的 {len(shown)} 套中 {hit} 套满足)",
+                           f"{en} (others are not removed; {hit} of the {len(shown)} shown meet it)"))
+    return ordered
+
+
 def _rank_once(state: State) -> dict:
     """按用户要的指标筛选 + 排序,再截到 RESULT_LIMIT 套。没有 LLM 参与。(一次;ROI 候选池扩容见下面的 rank)
 
@@ -1560,6 +1609,8 @@ def _rank_once(state: State) -> dict:
         notes.append(_t(state, zh, en))
 
     for need in params.get("amenity_needs") or []:
+        if need.get("strength") != "required":
+            continue                       # 「优先」的在排序后统一处理(_prefer_amenities),不剔除
         kind, limit = need["kind"], need["max_distance_m"]
         label = _kind_label(state, kind)
         keep(lambda m: (m.get("amenities") or {}).get(kind, {}).get("distance_m") is not None
@@ -1584,6 +1635,10 @@ def _rank_once(state: State) -> dict:
             loose = refinement.relaxed_floor(need)
             metrics = [m for m in metrics if meets(m, need, loose)]
             continue                                   # 说明文字在确定是否让步之后再写
+        # 「最好安静」这类偏好(strength 不是 required):不剔除,排序后统一前置(_prefer_amenities)。
+        # 只有「必须」才硬筛。相对调整(「再安静一点」)沿用门槛语义 —— 那套让步规则建立在门槛之上(见 DECISIONS)。
+        if not goals and need.get("strength") != "required":
+            continue
         keep(lambda m: (m.get("context_scores") or {}).get(attr) is not None
              and compare(m["context_scores"][attr], floor),
              f"已筛出「{label}」评分 {symbol} {floor} 的",
@@ -1670,6 +1725,7 @@ def _rank_once(state: State) -> dict:
             sparse = _t(state, f"只有 {len(metrics)} 套能在保留现有条件的同时完成这次调整。",
                         f"Only {len(metrics)} listing(s) can make this adjustment while keeping your filters.")
             adjust += [sparse] + [x for x in [_tradeoff_hint(state, new_params or params, goals)] if x]
+        metrics = _prefer_amenities(state, metrics, notes, abstract=False)
         out = {"metrics": metrics[:RESULT_LIMIT], "more": metrics[:RESULT_LIMIT * 4],
                "batch_offset": 0, "ranking": ";".join(adjust + notes), "turn_notice": None,
                "refinement_base": None}
@@ -1798,6 +1854,8 @@ def _rank_once(state: State) -> dict:
     else:
         notes.append(_t(state, "按语义相关度排序", "Sorted by semantic relevance"))
 
+    metrics = _prefer_amenities(state, metrics, notes)
+
     # more:前 20 套(含展示的这 5 套),给"换一批"翻页用。它们已经算好了,不留白不留。
     # 只留 4 批是因为每套 metric 带着设施、规划、学区、各属性评分,体积不小;
     # 而用户翻过四批还没看中的话,更该改条件而不是继续翻。
@@ -1896,7 +1954,8 @@ _EXPLAIN_SYSTEM = """你是房产投资助手。下面会给你一份已经算�
    不要自己算平均值、总价、月租、差额、涨幅 —— 一个都不要算。
 2. 某个指标的值是 null,就说"数据不足,暂无法计算",不要跳过、更不要编。
    land_size(土地面积)、building_area(建筑面积)是数据集的记录值,null 表示**没有记录**,
-   不要说"没有土地",也不要拿房间数去推测面积。
+   不要说"没有土地",也不要拿房间数去推测面积。area_suspect 里为 true 的那一项是**自相矛盾的记录**
+   (页面上标着"记录值存疑"):不要拿它比较大小或下结论,提到时只能说该面积记录存疑、需自行核实。
 3. **数字分三类,措辞必须不同,这是本系统最重要的一条规则:**
    - price / bedrooms 等:来自真实成交记录,可以直接陈述。
    - **annual_rent 不是这套房自己的租金**,是一个参考值(周租金基准×52,或推算值),来源看 rent_source。
@@ -2121,11 +2180,29 @@ def _assumption_lines(state, metrics) -> list[str]:
 _EXPLAIN_HIDDEN = ("car_spaces", "latitude", "longitude", "id")
 
 
+def area_suspect(m: dict) -> dict:
+    """数据集里自相矛盾的面积记录(挂牌信息由中介手填:填错格、平方/平方英尺混用、多打位数、
+    公寓填整栋楼占地)。**不改数据集**,只标「记录值存疑」。判据故意保守,郊外大地块这类真实值不标:
+      建筑:< 20 ㎡(多半填的是「平方」数)、> 2,000 ㎡、或非公寓且超过土地的 3 倍;
+      土地:公寓 > 1 公顷(是整栋楼的地),或 CBD 20 公里内 > 2 公顷。"""
+    land, bld = m.get("land_size"), m.get("building_area")
+    land = land if isinstance(land, (int, float)) and land > 0 else None
+    bld = bld if isinstance(bld, (int, float)) and bld > 0 else None
+    apartment = m.get("property_type") == "apartment"
+    cbd = m.get("distance_cbd")
+    near = isinstance(cbd, (int, float)) and cbd < 20
+    return {
+        "land": bool(land and ((apartment and land > 10_000) or (near and land > 20_000))),
+        "building": bool(bld and (bld < 20 or bld > 2_000 or (land and not apartment and bld > 3 * land))),
+    }
+
+
 def _explain_fact(m: dict) -> dict:
     fact = {k: v for k, v in m.items() if k not in _EXPLAIN_HIDDEN}
     for key in ("land_size", "building_area"):
         if not (isinstance(fact.get(key), (int, float)) and fact[key] > 0):
             fact[key] = None
+    fact["area_suspect"] = area_suspect(m)
     return fact
 
 

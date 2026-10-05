@@ -34,7 +34,8 @@ changes 每项必须带 source: 用户本轮原话中逐字出现的短语(不�
   "strength":"preferred/required","value_source":"inferred/explicit"}。
   只有用户明确指定数字才为 explicit;模糊要求的默认门槛是 inferred。
   必须/不能低于用 required,最好/希望用 preferred。不要凭空把偏好升级成必须。
-  amenity_needs 的 value 是单项 {kind,max_distance_m},planning_needs/unsupported_asks
+  amenity_needs 的 value 是单项 {kind,max_distance_m,strength}(strength 默认 preferred,
+  明说必须/一定/不能超过才 required),planning_needs/unsupported_asks
   的 value 是单个字符串;每次只改对应项。semantic_query 只用于无法结构化的新描述。
 - remove: 只在用户明确取消该要求时使用,field 同上;列表字段的 value 指明要删除的项。
   “更/少/没这么/再……一点”不是取消。“学校无所谓”删除 school_access,
@@ -173,9 +174,11 @@ def normalize_amenity_changes(changes, params):
             dist = max(400, int(round(needs[kind]["max_distance_m"] * 2 / 3 / 100) * 100))
         else:
             dist = (needs.get(kind) or {}).get("max_distance_m") or DEFAULT_AMENITY_M
+        strength = (value.get("strength") if isinstance(value, dict) and value.get("strength") in ("required", "preferred")
+                    else (needs.get(kind) or {}).get("strength") or "preferred")
         if action != "prioritize" or kind not in needs:
-            out.append({**base, "action": "set", "value": {"kind": kind, "max_distance_m": dist}})
-            needs[kind] = {"kind": kind, "max_distance_m": dist}
+            out.append({**base, "action": "set", "value": {"kind": kind, "max_distance_m": dist, "strength": strength}})
+            needs[kind] = {"kind": kind, "max_distance_m": dist, "strength": strength}
         if action == "prioritize":
             out.append({"action": "prioritize", "field": NEAREST + kind, "source": change.get("source")})
     return out

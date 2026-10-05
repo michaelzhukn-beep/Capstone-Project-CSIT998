@@ -87,10 +87,19 @@ needs = [{"attribute": "quiet", "min_score": 80}, {"attribute": "lively", "min_s
 incompatible = [row(1, 90, 10), row(2, 10, 90)]
 for order in (needs, list(reversed(needs))):
     check(len(g._sanitize({"abstract_needs": order}, "x")["abstract_needs"]) == 2, "Both preferences survive sanitization")
+    # 「必须」:没有交集就是 0 套,不悄悄丢掉其中一个条件
+    required = [{**n, "strength": "required"} for n in order]
+    out = g.rank({"params": {"abstract_needs": required}, "metrics": incompatible})
+    check(out["metrics"] == [] and "已忽略" not in out["ranking"], "No intersection never drops a required condition")
+    # 「优先」(默认):不剔除,两个偏好都写进排序说明,同样不悄悄忽略任何一个
     out = g.rank({"params": {"abstract_needs": order}, "metrics": incompatible})
-    check(out["metrics"] == [] and "已忽略" not in out["ranking"], "No intersection never drops a condition")
+    check(len(out["metrics"]) == 2 and "已忽略" not in out["ranking"]
+          and "优先「安静」" in out["ranking"] and "优先「热闹」" in out["ranking"],
+          "Preferred conditions are all kept and stated, none silently dropped")
+    out = g.rank({"params": {"abstract_needs": required}, "metrics": incompatible + [row(3, 85, 85)]})
+    check([m["id"] for m in out["metrics"]] == [3], "Real compatible candidate is retained (required)")
     out = g.rank({"params": {"abstract_needs": order}, "metrics": incompatible + [row(3, 85, 85)]})
-    check([m["id"] for m in out["metrics"]] == [3], "Real compatible candidate is retained")
+    check([m["id"] for m in out["metrics"]][0] == 3 and len(out["metrics"]) == 3, "Compatible candidate ranks first (preferred)")
 
 # Changing a score/deleting its filter or switching sort must not leave stale relative goals.
 fresh = g.prepare_refinement({**params, "sort_by": "price_asc"}, params)
