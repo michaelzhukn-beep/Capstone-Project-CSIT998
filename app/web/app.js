@@ -92,7 +92,66 @@
   // ---------------------------------------------------------------- 会话
   function newThread() {
     state.threadId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()).replace(/-/g, '');
-    sessionStorage.setItem('threadId', state.threadId);
+    try { sessionStorage.setItem('threadId', state.threadId); sessionStorage.removeItem(SESSION_KEY); } catch (_) { /* 隐私模式 */ }
+  }
+
+  // ---------------------------------------------------------------- 刷新后恢复对话(外部测试第 9 项)
+  /** 以前每次加载都开新对话:刷新后条件卡、房源、对话全没了,接着说「价格 ≤ 70 万」
+   *  被当成没有上下文的修改。服务端其实还留着这个对话(按 thread_id 存在内存里)。
+   *
+   *  现在每轮回答完成后,把「这一轮用户说的 + 完整回答 + 这一轮的结果」存进 sessionStorage
+   *  (同一个标签页刷新还在,关掉标签页就清掉,不跨标签页串)。重新加载时沿用原 thread_id,
+   *  逐轮重放进对话区 —— 旧回答里的「第 N 套」仍指向它当时那批房源;再问服务端这个对话还在不在,
+   *  不在(服务重启过)或对不上,就按原条件重新搜一次,让两边一致。 */
+  const SESSION_KEY = 'nw.session';
+  const MAX_SAVED_TURNS = 20;
+  function saveSession() {
+    const turns = []; let user = null;
+    for (const row of document.querySelectorAll('#chat .msg-row')) {
+      const time = row.querySelector('time')?.dateTime;
+      if (row.classList.contains('msg-row-user')) { user = { text: row.querySelector('.msg-user')?.textContent || '', time }; continue; }
+      const el = row.querySelector('.msg-assistant');
+      if (!el || el.dataset.raw == null) continue;
+      const snap = answerSnapshots.get(el);
+      turns.push({ user: user?.text ?? null, userTime: user?.time, answer: el.dataset.raw, time,
+        snap: snap ? { metrics: snap.metrics, params: snap.params, offset: snap.offset, ranking: snap.ranking, count: snap.count } : null });
+      user = null;
+    }
+    if (!turns.length) return;
+    const current = { params: state.params, intent: state.intent, metrics: state.metrics, pool: state.pool,
+      offset: state.offset, ranking: state.ranking, count: state.count, answer: state.answer };
+    for (const keep of [MAX_SAVED_TURNS, 5, 1]) {           // 超出配额就少存几轮,最后一轮总要留
+      try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ v: 1, threadId: state.threadId, turns: turns.slice(-keep), current })); return; }
+      catch (err) { if (keep === 1) console.warn('session save skipped', err); }
+    }
+  }
+  function savedSession() {
+    try {
+      const data = JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null');
+      return data && data.v === 1 && data.threadId && data.turns?.length && data.current?.params ? data : null;
+    } catch (_) { return null; }
+  }
+  function setMsgTime(body, iso) {
+    const t = iso && body.closest('.msg-main')?.querySelector('time'); if (!t) return;
+    t.dateTime = iso; t.textContent = new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  async function restoreSession(data) {
+    let server = null;
+    try { server = await fetch('/api/session/' + encodeURIComponent(data.threadId)).then(r => r.ok ? r.json() : null); } catch (_) { /* 离线也照样恢复界面 */ }
+    await metaReady;
+    if (state.threadId !== data.threadId || state.running) return;   // 恢复期间用户已经开了新对话 / 发了新问题
+    setStage('working');
+    for (const turn of data.turns) {
+      if (turn.user != null) setMsgTime(addUser(turn.user), turn.userTime);
+      if (turn.snap) Object.assign(state, turn.snap);    // 这条回答引用的是它当时那批房源
+      const a = addAssistantMsg(); setMsgTime(a, turn.time); renderAnswer(a, turn.answer);
+    }
+    Object.assign(state, data.current, { moreBuf: null, selectedId: null, historyView: null, resultNotice: '' });
+    renderConditions(); renderResults(); scrollChat(); saveSession();
+    const ids = (data.current.metrics || []).map(m => m.id);
+    const inSync = server && server.active && JSON.stringify(server.ids) === JSON.stringify(ids);
+    // 服务重启过(对话没了)或两边不是同一批:按原条件重新搜一次,后续追问才接得上
+    if (!inSync) refine(server && server.active ? server.params : data.current.params, T.statusRestore);
   }
   /** 布局形态。welcome:单列居中,不摆空栏;working:分栏。
    *  没有结果却摆着三个空栏,页面就有 80% 是空的 —— 那是没内容,不是留白。 */
@@ -268,6 +327,8 @@
   }
 
   function renderAnswer(el, text) {
+    el.dataset.raw = String(text || '');      // 原文留着,刷新后按原样重放(saveSession)
+    queueMicrotask(saveSession);
     // 完整响应提交后才保存,此后这条回答的引用永远使用同一份结果。
     let snapshot = answerSnapshots.get(el);
     if (!snapshot) {
@@ -612,6 +673,9 @@
     numChip('max_price', T.budgetMax, v => '≤ ' + money(v), T.aud);
     if (p.min_price != null) numChip('min_price', T.budgetMin, v => '≥ ' + money(v), T.aud);
     numChip('bedrooms', T.bedroomsLabel, v => T.beds(v), T.roomsUnit);
+    if (p.max_distance_cbd_km != null) c1.appendChild(chip(T.cbdChip(p.max_distance_cbd_km), { icon: 'location', cls: 'hard',
+      onClick: () => editNumber(T.cbdLabel, p.max_distance_cbd_km, 'km', val => apply(n => { n.max_distance_cbd_km = val; })),
+      onRemove: () => apply(n => { n.max_distance_cbd_km = null; }) }));
     if (p.bathrooms != null) numChip('bathrooms', T.bathroomsLabel, v => T.baths(v), T.roomsUnit);
     if (p.property_type) c1.appendChild(chip(ptZh(p.property_type), { icon: 'home', cls: 'hard', onClick: () => editSelect(T.typeLabel, p.property_type, meta.property_types, val => apply(n => { n.property_type = val; })), onRemove: () => apply(n => { n.property_type = null; }) }));
     else c1.appendChild(chip(T.typeAny, { icon: 'home', cls: 'unset', onClick: () => editSelect(T.typeLabel, '', meta.property_types, val => apply(n => { n.property_type = val || null; })) }));
@@ -644,7 +708,10 @@
       onClick: () => editNumber(T.nearPlaceTitle(np.name), np.max_distance_m, T.metres, val => apply(n => { n.near_place.max_distance_m = val || null; })),
       onRemove: () => apply(n => { n.near_place = null; if (n.sort_by === 'near_place_distance') n.sort_by = null; }) })); }
     if (p.school_zone) { soft++; c2.appendChild(chip(T.schoolZoneChip(p.school_zone.school), { icon: 'location', onRemove: () => apply(n => { n.school_zone = null; }) })); }
-    (p.planning_needs || []).forEach((need, i) => { soft++; c2.appendChild(chip(meta.planning_needs[need] || need, { onRemove: () => apply(n => { n.planning_needs.splice(i, 1); }) })); });
+    // 规划条件在排序时是硬剔除(不满足就整套去掉),放「必须满足」组 —— 以前放在「优先考虑」里,
+    // 看起来像「最好」,和实际行为不符(外部测试第 7 项)。
+    (p.planning_needs || []).forEach((need, i) => { c1.appendChild(chip(meta.planning_needs[need] || need, { cls: 'hard', onRemove: () => apply(n => { n.planning_needs.splice(i, 1); }) })); });
+    g1.classList.toggle('no-active', !c1.querySelector('.hard'));
     if (p.min_gross_yield != null) { soft++; c2.appendChild(chip(T.yieldChip(pct(p.min_gross_yield)), { icon: 'budget',
       onClick: () => editNumber(T.yieldTitle, p.min_gross_yield * 100, '%', val => apply(n => { n.min_gross_yield = val / 100; })),
       onRemove: () => apply(n => { n.min_gross_yield = null; }) })); }
@@ -666,7 +733,8 @@
 
     const add = h('button', 'cond-add'); add.type = 'button';
     const plus = h('span', null, '+'); plus.setAttribute('aria-hidden', 'true'); add.append(plus, document.createTextNode(T.addCondition));
-    add.addEventListener('click', () => { $('#input').focus(); }); card.appendChild(add);
+    add.setAttribute('aria-haspopup', 'dialog');
+    add.addEventListener('click', () => openAddMenu(p, apply)); card.appendChild(add);
 
     if (p.unsupported_asks && p.unsupported_asks.length) card.appendChild(h('div', 'cond-unsupported', T.unsupportedNote(p.unsupported_asks.map(a => (meta.unsupported_key || {})[a] || a))));
 
@@ -706,6 +774,54 @@
     inputs[0] && inputs[0].focus();
     pop.onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); ok.click(); } if (ev.key === 'Escape') closePopover(); };
   }
+  /** 「+ 添加条件」的结构化菜单(外部测试第 10 项:以前只是把光标移到输入框,看上去像坏了)。
+   *  只列还没设的条件;点一项就用条件卡已有的编辑框填,填完直接 refine —— 和改 chip 同一条路,不经过 LLM。
+   *  菜单底部保留「直接在对话里描述」,复杂要求还是说话更快。 */
+  function openAddMenu(p, apply) {
+    const meta = state.meta, pop = $('#popover');
+    pop.innerHTML = ''; pop.classList.remove('score-editor');
+    pop.setAttribute('role', 'dialog'); pop.setAttribute('aria-modal', 'true'); pop.setAttribute('aria-label', T.addCondition);
+    pop.appendChild(h('h4', null, T.addCondition));
+    const list = h('div', 'add-menu');
+    const item = (label, run) => {
+      const b = h('button', 'add-menu-item', label); b.type = 'button';
+      b.addEventListener('click', () => { closePopover(); run(); });
+      list.appendChild(b);
+    };
+    const int = v => Math.max(1, Math.round(v));
+    if (p.max_price == null) item(T.budgetMax, () => editNumber(T.budgetMax, null, T.aud, v => v && apply(n => { n.max_price = Math.round(v); })));
+    if (p.min_price == null) item(T.budgetMin, () => editNumber(T.budgetMin, null, T.aud, v => v && apply(n => { n.min_price = Math.round(v); })));
+    if (p.bedrooms == null) item(T.bedroomsLabel, () => editNumber(T.bedroomsLabel, null, T.roomsUnit, v => v && apply(n => { n.bedrooms = int(v); })));
+    if (p.bathrooms == null) item(T.bathroomsLabel, () => editNumber(T.bathroomsLabel, null, T.roomsUnit, v => v && apply(n => { n.bathrooms = int(v); })));
+    if (!p.property_type) item(T.typeLabel, () => editSelect(T.typeLabel, '', meta.property_types, v => v && apply(n => { n.property_type = v; })));
+    if (!p.suburb) item(T.suburbLabel, () => editText(T.suburbLabel, '', v => v && apply(n => { n.suburb = v; })));
+    if (p.max_distance_cbd_km == null) item(T.cbdLabel, () => editNumber(T.cbdLabel, null, 'km', v => v && apply(n => { n.max_distance_cbd_km = v; })));
+    item(T.addAmenity, () => openPopover(T.addAmenity, [
+      { label: T.addAmenityKind, type: 'select', value: 'train_station', options: meta.kinds },
+      { label: T.addAmenityMeters, type: 'number', value: 1500, min: 100, max: 20000, step: 100, required: true },
+    ], ([kind, m]) => apply(n => {
+      n.amenity_needs = [...(n.amenity_needs || []).filter(x => x.kind !== kind), { kind, max_distance_m: Math.round(Number(m)) }];
+    })));
+    const freeAttrs = Object.fromEntries(Object.entries(meta.attributes || {}).filter(([k]) => !(p.abstract_needs || []).some(x => x.attribute === k)));
+    if (Object.keys(freeAttrs).length) item(T.addPreference, () => openPopover(T.addPreference, [
+      { label: T.addPreferencePick, type: 'select', value: Object.keys(freeAttrs)[0], options: freeAttrs },
+      { label: T.scoreComparison, type: 'select', value: 'gte', options: T.scoreOperators },
+      { label: T.scoreValue, type: 'number', value: 60, min: 0, max: 100, step: 1, required: true },
+    ], ([attribute, op, score]) => apply(n => {
+      n.abstract_needs = [...(n.abstract_needs || []), { attribute, min_score: Number(score), operator: op, strength: 'preferred', value_source: 'explicit' }];
+    }), T.scoreHint, 'score-editor'));
+    const freePlan = Object.fromEntries(Object.entries(meta.planning_needs || {}).filter(([k]) => !(p.planning_needs || []).includes(k)));
+    if (Object.keys(freePlan).length) item(T.addPlanning, () => openPopover(T.addPlanning, [
+      { label: '', type: 'select', value: Object.keys(freePlan)[0], options: freePlan },
+    ], ([k]) => apply(n => { n.planning_needs = [...(n.planning_needs || []), k]; })));
+    pop.appendChild(list);
+    const chat = h('button', 'link add-menu-chat', T.addByChat); chat.type = 'button';
+    chat.addEventListener('click', () => { closePopover(); $('#input').focus(); });
+    pop.appendChild(chat);
+    pop.classList.add('is-open'); $('#backdrop').classList.add('is-open'); $('#backdrop').onclick = closePopover;
+    pop.onkeydown = ev => { if (ev.key === 'Escape') closePopover(); };
+    list.querySelector('button')?.focus();
+  }
   function closePopover() { $('#popover').classList.remove('is-open'); if (!$('#detail').classList.contains('open')) $('#backdrop').classList.remove('is-open'); }
   function editNumber(title, value, unit, cb) { openPopover(title, [{ label: unit, type: 'number', value }], ([v]) => { const n = parseFloat(v); if (!isNaN(n) && n > 0) cb(n); else if (v === '') cb(null); }); }
   const scoreSymbol = op => ({ gte: '≥', gt: '>', lte: '≤', lt: '<', eq: '=' }[op] || '≥');
@@ -743,7 +859,7 @@
       const label = h('label', 'result-sort'); label.appendChild(h('span', null, T.sortGroup));
       const select = h('select'); select.id = 'result-sort'; select.disabled = state.running || !!state.historyView;
       if (state.historyView) select.title = T.historySort;
-      for (const [key, text] of [['', view.params.relative_preferences?.length ? T.relativeSort : T.sortDefault], ...Object.entries(state.meta.sort_labels)]) {
+      for (const [key, text] of sortOptions(view.params)) {
         const option = h('option', null, text); option.value = key; option.selected = (view.params.sort_by || '') === key; select.appendChild(option);
       }
       select.addEventListener('change', () => {
@@ -761,6 +877,25 @@
     for (const n of (view.ranking || '').split(';').map(s => s.trim()).filter(Boolean)) notes.appendChild(h('div', null, n));
   }
 
+  /** 排序菜单。距离类排序只列「当前条件里真有」的那几个,并说出是到哪里:
+   *  有「距火车站 ≤ 1.5 km」才出现「距火车站从近到远」;点名了某个地点才出现「离 X 从近到远」。
+   *  以前固定挂着一条「离指定地点从近到远」,没点名地点时选了也没用(后端会降级成相关度),
+   *  而且用户不知道「指定地点」指什么。 */
+  function sortOptions(params) {
+    const labels = state.meta.sort_labels || {};
+    const opts = [['', params.relative_preferences?.length ? T.relativeSort : T.sortDefault]];
+    for (const [key, text] of Object.entries(labels)) {
+      if (key === 'near_place_distance' || key.startsWith('nearest:')) continue;
+      opts.push([key, text]);
+    }
+    for (const n of params.amenity_needs || []) {
+      const key = 'nearest:' + n.kind;
+      if (labels[key] && !opts.some(o => o[0] === key)) opts.push([key, labels[key]]);
+    }
+    if (params.near_place?.name) opts.push(['near_place_distance', T.sortNearPlace(params.near_place.name)]);
+    return opts;
+  }
+
   function headline(m) {
     const p = resultView().params || {};
     const s = p.relative_preferences?.[0]?.field || p.sort_by; const meta = state.meta;
@@ -768,6 +903,10 @@
       return { v: m.context_scores[s], l: T.attrDegree(attrZh(s)), cls: '', sub: evidenceLine(m, s, 2) };
     }
     if (s === 'near_place_distance' && m.near_place) return { v: dist(m.near_place.distance_m), l: T.toPlace(m.near_place.name), cls: '', sub: '' };
+    if (s && s.startsWith('nearest:')) {                 // 按到某类设施的距离排:大数字就是那个距离
+      const kind = s.slice(8), a = (m.amenities || {})[kind];
+      if (a && a.distance_m != null) return { v: dist(a.distance_m), l: kindZh(kind), cls: '', sub: a.name || '' };
+    }
     if (s === 'cap_rate') return { v: '~' + pct(m.cap_rate), l: 'Cap Rate', cls: 'assume', sub: T.byOpexAssumption };
     if (s === 'roi') return { v: '~' + pct(m.roi), l: 'ROI', cls: 'assume', sub: T.byOpexAssumption };
     if (s === 'predicted_gap') return { v: (m.predicted_gap > 0 ? '+' : '') + pct(m.predicted_gap), l: T.valGap, cls: 'model', sub: T.modelValueSub(money(m.predicted_price)) };
@@ -954,6 +1093,8 @@
         c.appendChild(rs);
       }
       c.addEventListener('click', () => openDetail(m));
+      c.addEventListener('mouseenter', () => hlPin(no, true));
+      c.addEventListener('mouseleave', () => hlPin(no, false));
       if (window.nwFav) c.appendChild(window.nwFav.button(m));   // 右下角收藏(favorites.js)
       r.appendChild(c);
     }
@@ -1090,7 +1231,11 @@
         keyboard: false,
       }).addTo(map);
       pins.push({ no, mk });
-      mk.on('click', () => openDetail(m));
+      // 点图钉:开详情 + 列表滚到同号房卡并闪一下。以前只开详情,房卡可能在列表下面看不见,
+      // 用户得自己往下翻才知道是哪一张(外部测试第 4 项)。
+      mk.on('click', () => { openDetail(m); focusCard(no); });
+      mk.on('mouseover', () => hlCard(no, true));
+      mk.on('mouseout', () => hlCard(no, false));
       group.push([m.latitude, m.longitude]);
     });
     state.pins = pins;
@@ -1143,6 +1288,17 @@
   // ---------------------------------------------------------------- 详情
   function kv(k, v, cls, s) { const e = h('div', 'kv'); e.appendChild(h('div', 'k', k)); const vv = h('div', 'v' + (cls ? ' ' + cls : '')); vv.textContent = v; e.appendChild(vv); if (s) e.appendChild(h('div', 's', s)); return e; }
   // ---------------------------------------------------------------- 点卡片 → 地图跟过去
+  /** 房卡 ↔ 图钉 悬停联动:指着哪一个,另一边同号的那个也亮起来。纯视觉提示,不改选中状态。 */
+  function hlPin(no, on) {
+    for (const { no: n, mk } of (state.pins || [])) {
+      const el = mk.getElement && mk.getElement();
+      if (el) el.classList.toggle('hl', on && n === no);
+    }
+  }
+  function hlCard(no, on) {
+    for (const c of document.querySelectorAll('.card')) c.classList.toggle('hl', on && c.dataset.no === String(no));
+  }
+
   /** 选中的那枚图钉加一圈光晕并浮到最上层。 */
   function markPin(no) {
     for (const { no: n, mk } of (state.pins || [])) {
@@ -1252,7 +1408,10 @@
 
   function makeDraggable(bar) {
     bar.addEventListener('pointerdown', ev => {
-      if (ev.target.closest('.d-close')) return;      // 点关闭不是拖窗
+      // 按在标题栏里的控件上(关闭、并排对比、只看不同……)不是拖窗。必须整类排除:
+      // 下面的 setPointerCapture 会把这次点击的 click 改派给标题栏,按钮永远收不到 ——
+      // 「+ 并排对比」「只看不同」「再加一套」曾因此全部点不动,只有当时单独放行的关闭键能用。
+      if (ev.target.closest('button, a, input, select, textarea, [role="button"]')) return;
       if (!twoColumn()) return;                       // 窄屏是底部抽屉,不拖
       const d = $('#detail');
       const r = d.getBoundingClientRect();
@@ -1638,6 +1797,7 @@
     for (const c of document.querySelectorAll('.card')) c.classList.toggle('selected', c.dataset.id == m.id);
     focusOnMap(m);
     const d = $('#detail'); d.innerHTML = ''; d.classList.remove('compare');
+    if (d.classList.contains('open')) dockDetail();
     state.compare = []; state.detailMetric = m;           // 单开:并排状态清空
     if (!keepToken) state.detailToken = m.id;             // 关闭时按这个令牌告诉收藏模块是谁打开的
     d.appendChild(h('div', 'grabber'));            // 窄屏抽屉的下拉条
@@ -1667,7 +1827,13 @@
     const head = h('div', 'd-head'); const l = h('div');
     l.appendChild(h('div', 'd-addr', (m.suburb || '') + ' · ' + (m.address || '')));
     l.appendChild(h('div', 'd-price', money(m.price)));
-    l.appendChild(h('div', 'd-meta', [T.beds(m.bedrooms), T.baths(m.bathrooms), typeZh(m), m.distance_cbd != null ? T.toCbd(m.distance_cbd) : null].filter(Boolean).join(' · ')));
+    // 土地 / 建筑面积:数据集记录值。0 是没记录(公寓近一半是 0),不显示,免得读成「没有土地」。
+    const area = v => (typeof v === 'number' && v > 0) ? Math.round(v).toLocaleString() : null;
+    const metaItems = [T.beds(m.bedrooms), T.baths(m.bathrooms), typeZh(m), m.distance_cbd != null ? T.toCbd(m.distance_cbd) : null,
+      area(m.land_size) && T.landArea(area(m.land_size)), area(m.building_area) && T.buildingArea(area(m.building_area))].filter(Boolean);
+    const metaLine = h('div', 'd-meta');            // 每一项整体换行:中文任意两字之间都能断,「土地」和「588 ㎡」会被拆到两行
+    metaItems.forEach((x, i) => { if (i) metaLine.appendChild(document.createTextNode(' · ')); metaLine.appendChild(h('span', 'nowrap', x)); });
+    l.appendChild(metaLine);
     head.appendChild(l);
     // 和卡片用同一套指标列(标签在上、数值在下),两处看起来才是一件东西
     const hl = headline(m);
@@ -2015,6 +2181,7 @@
     }
     const top = d.scrollTop;
     d.innerHTML = ''; d.classList.add('compare'); d.style.setProperty('--n', list.length);
+    if (d.classList.contains('open')) dockDetail();
     d.appendChild(h('div', 'grabber'));
     const bar = h('div', 'd-bar cmp-bar');
     bar.appendChild(h('div', 'd-bar-title', T.cmpTitle(list.length)));
@@ -2117,7 +2284,40 @@
     return list.length;
   }
 
-  function openSheet() { const d = $('#detail'); d.classList.add('open'); if (detailIsSheet()) { $('#backdrop').classList.add('is-open'); $('#backdrop').onclick = () => closeSheet({ user: true }); } d.scrollTop = 0; }
+  /** 宽屏工作区:详情窗贴在左边那一栏(对话栏)上,正好盖住它 —— 房源列表和地图始终完整露着。
+   *  以前浮在地图上,1280/1440/1920 宽时地图被挡 100%/92%/68%,看详情时就没法看这套房在哪
+   *  (外部测试第 5 项)。并排对比盖住「对话 + 列表」两栏;三列放不下时才往地图那边多伸一点。
+   *  尺寸每次按栏的实际位置量,不写死:栏宽随窗口变。首页(没有对话栏)和窄屏保持原样。 */
+  function dockDetail() {
+    const d = $('#detail'), chat = $('.col-chat'), res = $('.col-results');
+    const on = twoColumn() && $('#app').dataset.stage === 'working' && chat && chat.offsetWidth > 0;
+    d.classList.toggle('docked', !!on);
+    if (!on) return false;
+    const c = chat.getBoundingClientRect();
+    let width = c.width;
+    if (d.classList.contains('compare') && res) {
+      const n = state.compare.length || 2;
+      // 三栏布局(≥1280):盖住「对话 + 列表」。两栏布局里列表在地图下面、同一栏,铺满就把地图也盖了,
+      // 所以只取够放下 n 列的宽度。
+      const span = detailIsSheet() ? c.width : res.getBoundingClientRect().right - c.left;
+      width = Math.min(Math.max(span, n * 320 + 48), innerWidth - c.left - 16);
+    }
+    d.style.setProperty('--dl', c.left + 'px');
+    d.style.setProperty('--dt', c.top + 'px');
+    d.style.setProperty('--dw', width + 'px');
+    d.style.setProperty('--dh', Math.max(240, innerHeight - c.top - 16) + 'px');
+    return true;
+  }
+  addEventListener('resize', () => { if ($('#detail').classList.contains('open')) dockDetail(); });
+
+  function openSheet() {
+    const d = $('#detail');
+    const docked = dockDetail();
+    d.classList.add('open');
+    // 贴边时不加遮罩:遮罩会把列表和地图一起压暗,等于又挡住了
+    if (detailIsSheet() && !docked) { $('#backdrop').classList.add('is-open'); $('#backdrop').onclick = () => closeSheet({ user: true }); }
+    d.scrollTop = 0;
+  }
   /** user:true 只给「用户主动关掉详情」(×、Esc、点遮罩)。新对话、回首页、换一批这类
    *  程序顺手收起不算 —— 收藏抽屉只在前者之后重新打开(见 favorites.js)。 */
   function closeSheet({ user = false } = {}) {
@@ -2563,7 +2763,8 @@
     initMapPanel();
     applyStaticText();
     metaReady = fetch('/api/meta?lang=' + state.lang).then(r => r.json()).then(j => { state.meta = j; });
-    newThread();
+    const saved = savedSession();
+    if (saved) state.threadId = saved.threadId; else newThread();
     $('#composer').addEventListener('submit', ev => { ev.preventDefault(); const t = $('#input').value.trim(); if (!t) return; $('#input').value = ''; send(t); });
     // 首屏沙盘信息牌:点击即按该问句搜索(与首屏词条同一条路径)
     window.addEventListener('nw:query', e => { if (state.running || !e.detail) return; $('#input').value = ''; send(e.detail); });
@@ -2591,6 +2792,7 @@
     driftHost.addEventListener('focusin', stopDrift);
     driftHost.addEventListener('focusout', () => driftLater(scheduleDrift, 0));
     $('#input').addEventListener('input', () => { stopDrift(); scheduleDrift(); });
+    if (saved) restoreSession(saved);
     document.fonts.ready.then(() => {
       if ($('#app').dataset.stage !== 'welcome') return;
       stopDrift();

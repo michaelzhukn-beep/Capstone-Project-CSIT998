@@ -10,8 +10,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Serif+SC:wght@500;600&display=swap">
-<link rel="stylesheet" href="/static/app.css">
-<!-- 宽屏首屏的城市沙盘(showroom/showroom.mjs)用 three.js 模块 -->
+<link rel="stylesheet" href="/static/app.css?v=ios-20261003-3">
+<!-- 首屏的城市沙盘(showroom/showroom.mjs)用 three.js 模块 -->
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
 </head>
 <body>
@@ -61,7 +61,7 @@
           <h1 class="welcome-h">更好的家,<br>从一个问题开始。</h1>
           <p class="welcome-p">输入预算、区域或偏好。<br>所有评估数据均基于实测、假设校验与模型测算。</p>
         </div>
-        <!-- 宽屏首屏:城市沙盘 + 户型样板(真实三维模型,光照烘焙)。点输入框镜头右移到户型,牌子可点。
+        <!-- 首屏:城市沙盘 + 户型样板(真实三维模型,光照烘焙)。点输入框镜头右移到户型,牌子可点。
              加载成功时 #app 带 data-showroom="ready",CSS 才切到这个版式;否则保持下面的 SVG 城市。 -->
         <div id="showroom" class="showroom">
           <div id="showroom-view" class="showroom-view" aria-hidden="true"></div>
@@ -211,6 +211,59 @@
 <script src="/static/app.js"></script>
 <script src="/static/auth.js"></script>
 <script src="/static/favorites.js"></script>
-<script type="module" src="/static/showroom/showroom.mjs"></script>
+<script>
+(function () {
+  var revision = 'ios-20261003-3';
+  var diagnostic = window.__showroomDiagnostic = { revision: revision, module: '等待加载' };
+  var enabled = /(?:^|[?&])background-status=1(?:&|$)/.test(location.search);
+  window.addEventListener('error', function (event) {
+    if (event.target && event.target.id === 'showroom-module') diagnostic.module = '模块或依赖加载失败';
+  }, true);
+  if (!enabled) return;
+  var panel = document.createElement('pre');
+  panel.id = 'background-status';
+  panel.style.cssText = 'position:fixed;z-index:10000;left:8px;right:8px;bottom:12px;max-height:45vh;overflow:auto;margin:0;padding:10px;background:rgba(255,255,255,.96);border:1px solid #bbb;border-radius:8px;color:#222;font:12px/1.45 monospace;white-space:pre-wrap;pointer-events:none';
+  document.body.appendChild(panel);
+  var importMap = typeof HTMLScriptElement.supports === 'function' ? HTMLScriptElement.supports('importmap') : null;
+  var phases = { 'module-ready':'模块已执行', 'loading-cameras':'加载相机资料', 'creating-renderer':'创建图形渲染器', 'loading-assets':'加载模型、贴图或解码器', 'building-scene':'建立沙盘', 'first-render':'首次绘制', 'ready':'新版背景已就绪', 'context-lost':'图形上下文丢失' };
+  var reasons = { 'missing-stage':'背景容器缺失', 'webgl2-unavailable':'WebGL2 不可用', 'webgl2-error':'WebGL2 检测异常', 'draco-worker-error':'DRACO 工作线程失败' };
+  var count = 0;
+  function render() {
+    var report = window.__showroom || {};
+    var errorType = report.error && /^(Error|TypeError|ReferenceError|SyntaxError|AbortError|NetworkError|SecurityError)(?=:|$)/.exec(report.error);
+    var lines = [
+      '背景诊断 ' + revision,
+      '模块版本: ' + (report.revision || '尚未执行'),
+      'ImportMap: ' + (importMap === null ? '未知' : importMap ? '支持' : '不支持'),
+      'WebGL2: ' + (typeof report.webgl2 === 'boolean' ? report.webgl2 ? '可用' : '不可用' : '尚未检测'),
+      '步骤: ' + (phases[report.phase] || diagnostic.module),
+      '状态: ' + (report.stage || '等待模块'),
+      '原因: ' + (reasons[report.reason] || (errorType && errorType[1]) || '未记录'),
+      '失败资源: ' + (report.failedAsset || '无'),
+      '图形上下文: ' + (report.contextLost ? '已丢失' : '未报告丢失')
+    ];
+    if (report.assetStartedMs) lines.push('资产用时: ' + Math.round((report.loadMs || (performance.now() - report.assetStartedMs)) / 1000) + ' 秒');
+    if (report.decoder) lines.push('DRACO: ' + report.decoder.completed + '/' + report.decoder.started + ' 完成;失败 ' + report.decoder.failed);
+    if (report.imageQueue) lines.push('图片队列: 等待 ' + report.imageQueue.queued + '; 进行 ' + report.imageQueue.active + '/2; 峰值 ' + report.imageQueue.peak);
+    if (report.decoder) lines.push('DRACO worker: 上限 ' + report.decoder.workerLimit + '; ' + (report.decoder.workersDisposed ? '已释放' : '使用中'));
+    if (report.houseTarget) lines.push('户型缓冲: ' + (report.houseTarget.allocated ? report.houseTarget.width + '×' + report.houseTarget.height : '尚未分配'));
+    if (report.images) lines.push('内嵌贴图: ' + report.images.completed + '/' + report.images.started + ' 完成;失败 ' + report.images.failed + ' (' + (report.textureLoader || '未知') + ')');
+    if (report.assets) {
+      var labels = {downloading:'下载',decoding:'解析/解码',loading:'加载',failed:'失败'};
+      Object.keys(report.assets).filter(function(name){return report.assets[name].state !== 'ready';}).slice(0,3).forEach(function(name){
+        var asset=report.assets[name]; var progress=typeof asset.loaded==='number'?' '+(asset.loaded/1048576).toFixed(1)+'/'+(asset.total>0?(asset.total/1048576).toFixed(1):'?')+' MB':'';
+        lines.push('等待: '+name+' '+(labels[asset.state]||asset.state)+progress);
+      });
+    }
+    panel.textContent = lines.join('\n');
+    count++;
+    if (count >= 180) clearInterval(timer);
+  }
+  var timer = setInterval(render, 500);
+  render();
+})();
+</script>
+
+<script id="showroom-module" type="module" src="/static/showroom/showroom.mjs?v=ios-20261003-3"></script>
 </body>
 </html>

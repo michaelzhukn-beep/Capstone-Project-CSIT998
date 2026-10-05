@@ -138,12 +138,22 @@ assert top_share < 0.75, (
 assert density.get("low", 0) > 1000 and density.get("high", 0) > 500, (
     f"低密度或高密度的房源太少,分类多半有问题:{density.most_common()}")
 
-# ---- 护栏三:三个筛选条件都要真的能筛 ----
+# ---- 护栏三:每个筛选条件都要真的能筛 ----
 #
 # 一个恒真或恒假的筛选条件比没有更糟:用户以为筛过了。
+# 按类别排除的那几条(no_airport_noise 等,2026-10-05)本来就稀少:全市只有 1.3% 的房源有机场噪声叠加层,
+# 但在机场周边是多数。对它们不用比例,改用更严的判据:确实剔除了房源,且**恰好**剔除带该类叠加层的房源。
+from app.amenities import planning as _planning
+_category = {"no_" + k: fams for k, (_, fams) in _planning.RISK_GROUPS.items()}
 for need, (zh, predicate) in _PLANNING_NEEDS.items():
     hits = sum(1 for r in result if predicate(r))
     share = hits / len(rows)
+    if need in _category:
+        fams = _category[need]
+        expect = sum(1 for r in result if "zone" in r and not any(o["family"] in fams for o in r.get("overlays", [])))
+        assert hits == expect and 0 < len(rows) - hits < len(rows), (
+            f"「{need}」剔除了 {len(rows) - hits} 套,应恰好剔除带 {fams} 叠加层或无规划数据的房源({zh})")
+        continue
     assert 0.02 < share < 0.98, (
         f"筛选条件「{need}」命中 {share:.1%} 的房源 —— 接近恒真或恒假,"
         f"等于没筛。({zh})")

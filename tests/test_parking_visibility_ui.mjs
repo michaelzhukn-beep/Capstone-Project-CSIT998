@@ -20,15 +20,17 @@ function check(ok, name) {
   if (ok) pass++; else fail++;
 }
 
-const line = app.split(/\r?\n/).find(s => s.includes("l.appendChild(h('div', 'd-meta', "));
-const match = line?.match(/l\.appendChild\(h\('div', 'd-meta', (.*)\)\);/);
+// 详情头部的元信息(2026-10-05 起拆成多行:metaItems 数组 + 逐项 nowrap,并加了土地/建筑面积)。
+// 取出真实的 metaItems 表达式和 area 辅助函数来跑,检查车位永远不出现、其余信息照常显示。
+const match = app.match(/const area = (v => [^\n]*?);[^\n]*\n\s*const metaItems = (\[[\s\S]*?\]\.filter\(Boolean\));/);
 check(Boolean(match), '[detail] found the real detail metadata expression');
 if (match) {
-  const render = new Function('m', 'T', 'typeZh', `return ${match[1]};`);
+  const render = new Function('m', 'T', 'typeZh', `const area = ${match[1]}; return ${match[2]}.join(' · ');`);
   for (const [lang, label] of [['zh', '车位'], ['en', 'car spaces']]) {
     const T = {
       beds: n => `${n} beds`, baths: n => `${n} baths`,
       carSpaces: n => `${n} ${label}`, toCbd: km => `${km} km to CBD`,
+      landArea: v => `land ${v}`, buildingArea: v => `floor ${v}`,
     };
     for (const car of [0, null, 3]) {
       const meta = render({ bedrooms: 2, bathrooms: 1, property_type: 'house', car_spaces: car, distance_cbd: 4 }, T, () => 'house');

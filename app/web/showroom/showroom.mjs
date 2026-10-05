@@ -1,7 +1,7 @@
-// 首屏城市沙盘 + 户型样板(宽屏 ≥900px)。网页加载真实三维模型,光照全部来自 Cycles 烘焙 / 投影渲染贴图。
+// 首屏城市沙盘 + 户型样板(桌面与手机共用)。网页加载真实三维模型,光照全部来自 Cycles 烘焙 / 投影渲染贴图。
 // 资产与重建流程见 design/white-city/LIGHTING_V24_EXPERIMENTS.md 实验 16(bake_v28_showroom.py 等);
 // 本目录的 glb / png / json 是那条流水线的产物副本,不要手改。
-// 失败(无 WebGL、窄屏、加载出错)时什么都不做:#app 不会带 data-showroom,首页保持原来的 SVG 版式。
+// 失败(无 WebGL、加载出错)时什么都不做:#app 不会带 data-showroom,首页保持原来的 SVG 版式。
 //
 // 交互:点击输入框 → 镜头(固定朝向的正交相机)向右平移并略微拉近到 4 栋户型;失焦且输入为空 → 回到城市。
 // 静止时不重绘;只在平移动画期间逐帧绘制。prefers-reduced-motion 时直接切换。
@@ -9,13 +9,15 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { createTaskQueue, settleModels } from './asset-loading.mjs?v=ios-20261003-3';
 
 const BASE = '/static/showroom/';
 const q = new URLSearchParams(location.search);
 const $ = s => document.querySelector(s);
 const app = $('#app'), stage = $('#showroom'), viewport = $('#showroom-view'), signLayer = $('#showroom-signs'), input = $('#input');
-const report = window.__showroom = { stage: 'boot' };
+const report = window.__showroom = { revision: 'ios-20261003-3', stage: 'boot', phase: 'module-ready' };
 const WIDE = matchMedia('(min-width: 900px)');
+let rendererForCleanup;
 
 // 牌面文案在 i18n.js:showroomSigns 为原有已验解析的示例,showroomSignVariants 为轮换扩展。
 const HOUSES = ['cottage', 'villa', 'terrace', 'apartment'];
@@ -121,12 +123,24 @@ function quadMatrix(w, h, [tl, tr, br, bl]) {
 }
 
 async function main() {
+  report.phase = 'loading-cameras';
   const [camStart, camEnd, camWide, signs3d] = await Promise.all(['cam-start', 'cam-end', 'cam-wide', 'cam-start-signs3d'].map(n => json(BASE + n + '.json')));
   const [RX, RY] = camStart.resolution;
   // 容器尺寸由主站 CSS 决定(铺满首屏),不在这里设比例
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+  report.phase = 'creating-renderer';
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+    report.webgl2 = true;
+    rendererForCleanup = renderer;
+  } catch (error) {
+    report.webgl2 = false; report.stage = 'unsupported'; report.reason = 'webgl2-unavailable';
+    throw error;
+  }
   renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.toneMapping = THREE.NoToneMapping; renderer.setClearColor(0, 0);
+  renderer.domElement.addEventListener('webglcontextlost', () => { report.contextLost = true; report.phase = 'context-lost'; });
+  renderer.domElement.addEventListener('webglcontextrestored', () => { report.contextLost = false; });
   viewport.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
 
@@ -171,20 +185,95 @@ async function main() {
   wideCam.updateMatrixWorld(); wideCam.updateProjectionMatrix();
   const wideVP = new THREE.Matrix4().multiplyMatrices(wideCam.projectionMatrix, wideCam.matrixWorldInverse);
 
-  const draco = new DRACOLoader().setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/');
-  const loader = new GLTFLoader().setDRACOLoader(draco), texLoader = new THREE.TextureLoader();
+  report.phase = 'loading-assets';
+  const manager = new THREE.LoadingManager();
+  const assetName = url => url.startsWith('blob:') ? 'embedded-texture' : new URL(url, location.href).pathname.split('/').pop().replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 80);
+  report.assets = {};
+  report.decoder = { started: 0, completed: 0, failed: 0, workerLimit: 1, workersDisposed: false };
+  report.imageQueue = {};
+  const queueImage = createTaskQueue(2, report.imageQueue);
+  report.images = { started: 0, completed: 0, failed: 0 };
+  manager.onError = url => { report.failedAsset = assetName(url); };
+  manager.onProgress = (_, loaded, total) => { report.requests = { loaded, total }; };
+  const draco = new DRACOLoader(manager).setDecoderPath(BASE + 'draco/').setWorkerLimit(1);
+  // r170 reports decode messages, but worker runtime/message failures also need to reject waiting tasks.
+  const getWorker = draco._getWorker.bind(draco);
+  draco._getWorker = (...args) => getWorker(...args).then(worker => {
+    if (!worker.__showroomErrors) {
+      worker.__showroomErrors = true;
+      const failed = () => {
+        worker.__showroomFailure = true;
+        report.reason = 'draco-worker-error'; report.failedAsset = 'draco-worker';
+        for (const callback of Object.values(worker._callbacks)) callback.reject(new Error('DRACO worker failed'));
+      };
+      worker.addEventListener('error', failed);
+      worker.addEventListener('messageerror', failed);
+    }
+    if (worker.__showroomFailure) throw new Error('DRACO worker failed');
+    return worker;
+  });
+  const decodeGeometry = draco.decodeGeometry.bind(draco);
+  const pendingDecodes = new Set();
+  let decoderClosing = false;
+  draco.decodeGeometry = (...args) => {
+    report.decoder.started++;
+    const task = Promise.resolve().then(() => {
+      if (decoderClosing) throw new Error('DRACO decoder is closing');
+      return decodeGeometry(...args);
+    }).then(result => {
+      report.decoder.completed++; return result;
+    }, error => { report.decoder.failed++; throw error; });
+    pendingDecodes.add(task);
+    const finished = () => pendingDecodes.delete(task);
+    task.then(finished, finished);
+    return task;
+  };
+  const loader = new GLTFLoader(manager).setDRACOLoader(draco), texLoader = new THREE.TextureLoader(manager);
+  loader.register(parser => {
+    report.textureLoader = parser.textureLoader.isImageBitmapLoader ? 'ImageBitmap' : 'Image';
+    const loadImage = parser.loadImageSource.bind(parser);
+    parser.loadImageSource = (...args) => queueImage(() => {
+      report.images.started++;
+      return Promise.resolve().then(() => loadImage(...args)).then(result => {
+        report.images.completed++; return result;
+      }, error => { report.images.failed++; throw error; });
+    });
+    return { name: 'ShowroomAssetDiagnostics' };
+  });
   const t0 = performance.now();
-  const [city, trees, treeTex, shadowTex, shadowHouseTex, lawnMaps, waterMasks] = await Promise.all([
-    loader.loadAsync(BASE + 'city-v26-baked.glb'), loader.loadAsync(BASE + 'trees-v26.glb'),
-    texLoader.loadAsync(BASE + 'layer-trees.webp'), texLoader.loadAsync(BASE + 'floor-shadow-city.webp'),
-    texLoader.loadAsync(BASE + 'floor-shadow-house-clean.webp'),
-    // 使用原始的草坪独立渲染层。旧 GLB 中的草坪图被 beauty/ID 合成混入白色散点。
-    Promise.all(HOUSES.map(k => texLoader.loadAsync(BASE + 'lawn-' + k + '.png'))),
-    DEBUG_WATER ? Promise.all(['plinth', 'river'].map(k => texLoader.loadAsync(BASE + 'water-mask-' + k + '.png'))) : [],
+  report.assetStartedMs = t0;
+  const track = (name, promise) => promise.then(result => {
+    report.assets[name].state = 'ready'; return result;
+  }, error => { report.assets[name].state = 'failed'; report.failedAsset = name; throw error; });
+  const model = name => {
+    const asset = report.assets[name] = { state: 'downloading', loaded: 0, total: 0 };
+    return track(name, loader.loadAsync(BASE + name, progress => {
+      asset.loaded = progress.loaded; asset.total = progress.total;
+      if (progress.total > 0 && progress.loaded >= progress.total) asset.state = 'decoding';
+    }));
+  };
+  const texture = name => {
+    report.assets[name] = { state: 'loading' };
+    return track(name, queueImage(() => texLoader.loadAsync(BASE + name)));
+  };
+  const models = settleModels([model('city-v26-baked.glb'), model('trees-v26.glb')], async () => {
+    decoderClosing = true;
+    while (pendingDecodes.size) await Promise.allSettled([...pendingDecodes]);
+    draco.dispose(); report.decoder.workersDisposed = true;
+  });
+  const [[city, trees], treeTex, shadowTex, shadowHouseTex, lawnMaps, waterMasks] = await Promise.all([
+    models,
+    texture('layer-trees.webp'), texture('floor-shadow-city.webp'),
+    texture('floor-shadow-house-clean.webp'),
+    // Keep the original lawn overlays, models and textures.
+    Promise.all(HOUSES.map(k => texture('lawn-' + k + '.png'))),
+    DEBUG_WATER ? Promise.all(['plinth', 'river'].map(k => texture('water-mask-' + k + '.png'))) : [],
   ]);
+
   const WATER_OBJECTS = DEBUG_WATER ? { 'v27 plinth': waterMasks[0], '13 Continuous river': waterMasks[1] } : {};
   for (const m of waterMasks) { m.flipY = false; m.colorSpace = THREE.NoColorSpace; }   // 与 GLB 贴图同一套 UV
   report.loadMs = Math.round(performance.now() - t0);
+  report.phase = 'building-scene';
 
   const aniso = renderer.capabilities.getMaxAnisotropy();
   report.lawnOverrides = [];
@@ -253,7 +342,10 @@ async function main() {
 
   // 离屏目标 + 移轴后处理
   const rt = new THREE.WebGLRenderTarget(1, 1, { samples: 4, colorSpace: THREE.LinearSRGBColorSpace });
-  const houseRT = rt.clone();
+  let houseRT = null;
+  const emptyHouseTexture = new THREE.DataTexture(new Uint8Array(4), 1, 1);
+  emptyHouseTexture.colorSpace = THREE.LinearSRGBColorSpace; emptyHouseTexture.needsUpdate = true;
+  report.houseTarget = { allocated: false, width: 0, height: 0, allocations: 0, samples: 4 };
   const postScene = new THREE.Scene(), postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), tiltMaterial));
 
@@ -325,7 +417,7 @@ async function main() {
   }
   function stopSigns(immediate = true) { cards.forEach(c => stopSign(c, immediate)); }
   function canRotate(c) {
-    return app.dataset.stage === 'welcome' && WIDE.matches && !document.hidden && !reduced.matches &&
+    return app.dataset.stage === 'welcome' && !document.hidden && !reduced.matches &&
       pan === 1 && to === 1 && !raf && !c.hovered && !c.el.contains(document.activeElement);
   }
   function fadeSign(c, target, done, duration = fadeMs) {
@@ -453,11 +545,18 @@ async function main() {
     // 先更新同帧的焦点再渲染,避免镜头移动时模糊带迟一帧。
     camera.layers.set(0);
     renderer.setRenderTarget(rt); renderer.setClearColor(PAGE_BG, 1); renderer.clear(); renderer.render(scene, camera);
-    camera.layers.set(1);
-    renderer.setRenderTarget(houseRT); renderer.setClearColor(0, 0); renderer.clear();
-    if (f > 0) renderer.render(scene, camera);
-    camera.layers.set(0);
-    tiltMaterial.uniforms.uTex.value = rt.texture; tiltMaterial.uniforms.uHouseTex.value = houseRT.texture;
+    if (f > 0 && !houseRT) {
+      houseRT = rt.clone();
+      report.houseTarget.allocated = true; report.houseTarget.allocations++;
+      report.houseTarget.width = rt.width; report.houseTarget.height = rt.height;
+    }
+    if (houseRT) {
+      camera.layers.set(1);
+      renderer.setRenderTarget(houseRT); renderer.setClearColor(0, 0); renderer.clear();
+      if (f > 0) renderer.render(scene, camera);
+      camera.layers.set(0);
+    }
+    tiltMaterial.uniforms.uTex.value = rt.texture; tiltMaterial.uniforms.uHouseTex.value = houseRT ? houseRT.texture : emptyHouseTexture;
     tiltMaterial.uniforms.uStrength.value = q.get('tilt') === '0' ? 0 : e;
     tiltMaterial.uniforms.uTexel.value.set(1 / rt.width, 1 / rt.height);
     renderer.setRenderTarget(null); renderer.setClearColor(0, 0); renderer.render(postScene, postCam);
@@ -536,7 +635,7 @@ async function main() {
     syncSigns();
   });
 
-  const onWelcome = () => app.dataset.stage === 'welcome' && WIDE.matches;
+  const onWelcome = () => app.dataset.stage === 'welcome';
   document.addEventListener('pointermove', ev => {
     if (!onWelcome() || ev.pointerType === 'touch' || ev.target.closest('button, input, form')) { stopParallax(); return; }
     const edge = (p, length) => {
@@ -577,19 +676,27 @@ async function main() {
   function resize() {
     renderer.setPixelRatio(Math.min(devicePixelRatio, Number(q.get('pr')) || 2));
     renderer.setSize(stage.clientWidth, stage.clientHeight, false);
-    renderer.getDrawingBufferSize(size); rt.setSize(size.x, size.y); houseRT.setSize(size.x, size.y);
+    renderer.getDrawingBufferSize(size); rt.setSize(size.x, size.y);
+    if (houseRT) {
+      houseRT.setSize(size.x, size.y);
+      report.houseTarget.width = size.x; report.houseTarget.height = size.y;
+    }
     draw();
   }
+  report.phase = 'first-render';
   new ResizeObserver(resize).observe(stage);
   resize();
   if (q.get('pan')) report.setPan(Number(q.get('pan')));
   app.dataset.showroom = 'ready';
   window.dispatchEvent(new Event('nw:showroom'));
-  report.stage = 'ready';
+  report.stage = 'ready'; report.phase = 'ready';
 }
 
-function supported() {
-  if (!stage || !WIDE.matches) return false;
-  try { return !!document.createElement('canvas').getContext('webgl2'); } catch (_) { return false; }
-}
-if (supported()) main().catch(err => { console.warn('showroom disabled:', err); report.stage = 'error'; report.error = String(err); viewport.replaceChildren(); });
+if (!stage) { report.stage = 'unsupported'; report.reason = 'missing-stage'; }
+else main().catch(err => {
+  console.warn('showroom disabled:', err);
+  if (report.stage !== 'unsupported') report.stage = 'error';
+  report.error = String(err);
+  rendererForCleanup?.dispose();
+  viewport.replaceChildren();
+});

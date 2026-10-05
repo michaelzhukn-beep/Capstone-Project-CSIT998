@@ -14,8 +14,9 @@ class ClarifyChange(ValueError):
     pass
 
 r = load(ROOT / "app/orchestration/refinement.py",
-         {"snapshot", "apply_changes"},
+         {"snapshot", "apply_changes", "normalize_amenity_changes"},
          {"deepcopy": deepcopy, "ClarifyChange": ClarifyChange, "valid_goals": lambda _: [],
+          "AMENITY_KINDS": set(), "DEFAULT_AMENITY_M": 1500, "NEAREST": "nearest:",
           "ATTRS": set(), "SCALARS": {"max_price", "min_price", "bedrooms", "bathrooms", "semantic_query"},
           "LIST_KEYS": {"unsupported_asks": None}, "OPPOSITE": {}, "RELATIVE_FIELDS": set()})
 n["refinement"] = types.SimpleNamespace(**r)

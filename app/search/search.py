@@ -21,6 +21,11 @@
 # (5,000)时,编排层只能在语义最相关的那 5,000 套里按价格/回报率排序 ——「80 万以内最便宜」
 # 命中 8,246 套,系统给的前 5 漏掉了库里真正最便宜的 $131k、$145k、$160k。价格和毛回报率
 # 都是库里的列,本来就能在 SQL 里排。
+#
+# **第二处改动:加了可选参数 max_distance_cbd_km**(2026-10-05,外部测试第 3 项)。默认 None 时
+# 新加的那一行条件恒为真,已有调用方的结果不变。距离按坐标算**直线**(和 nearby.distance_to_cbd_km、
+# 页面上显示的「距 CBD」同一个公式),不用 distance_cbd 列 —— 那一列有 106 个区写错(审计 BUG-05);
+# 只有缺坐标的房源才退回该列,和展示口径一致。
 
 # %%
 import torch
@@ -58,6 +63,18 @@ _COLUMNS = """id, suburb, address, property_type, price, bedrooms, bathrooms,
            car_spaces, land_size, building_area, distance_cbd,
            latitude, longitude, annual_rent, description"""
 
+# 到 CBD 的球面直线距离(公里),与 nearby._haversine_m 同一公式、同一地球半径;没坐标才用数据集的列。
+# 比较用**页面上显示的那个数**(保留一位小数):显示「5.0 km」的房源必须出现在「≤ 5 km」里。
+# 用不取整的值比,会漏掉 5.04 km 这种(页面显示 5.0)—— 实测全库漏 44 套。
+_CBD_LAT, _CBD_LON = -37.8136, 144.9631            # = nearby.CBD_POINT
+# 缺坐标必须显式走 CASE,不能靠 COALESCE:least() 会**忽略** NULL,least(1.0, NULL) = 1.0,
+# 没坐标的房源会被算成 asin(1) = 半个地球周长(20,015 km),全被筛掉(实测 5 公里内漏 5 套)。
+_CBD_KM_SQL = """CASE WHEN latitude IS NULL OR longitude IS NULL THEN distance_cbd::float8
+        ELSE 2 * 6371.0::float8 * asin(sqrt(least(1.0::float8,
+          power(sin(radians(latitude::float8 - %(cbd_lat)s::float8) / 2), 2)
+          + cos(radians(%(cbd_lat)s::float8)) * cos(radians(latitude::float8))
+            * power(sin(radians(longitude::float8 - %(cbd_lon)s::float8) / 2), 2)))) END"""
+
 _SEARCH_SQL = """
     SELECT """ + _COLUMNS + """
     FROM properties
@@ -66,6 +83,7 @@ _SEARCH_SQL = """
       AND (%(bedrooms)s IS NULL OR bedrooms = %(bedrooms)s)
       AND (%(bathrooms)s IS NULL OR bathrooms = %(bathrooms)s)
       AND (%(property_type)s IS NULL OR property_type = %(property_type)s)
+      AND (%(max_distance_cbd_km)s IS NULL OR round((""" + _CBD_KM_SQL + """)::numeric, 1) <= %(max_distance_cbd_km)s)
       AND (%(suburb)s IS NULL OR lower(suburb) = lower(%(suburb)s))
     ORDER BY {order}embedding <=> %(query_vector)s, id
     LIMIT %(limit)s
@@ -107,6 +125,7 @@ def search_properties(
     order_by: str | None = None,
     opex_rate: float | None = None,
     other_costs: float | None = None,
+    max_distance_cbd_km: float | None = None,
 ) -> list[dict]:
     """Return up to `limit` property records matching the constraints,
     ranked by semantic similarity to `semantic_query`.
@@ -130,6 +149,8 @@ def search_properties(
             "suburb": suburb,
             "query_vector": query_vector,
             "limit": limit,
+            "max_distance_cbd_km": max_distance_cbd_km,
+            "cbd_lat": _CBD_LAT, "cbd_lon": _CBD_LON,
             **order_args,
         })
         columns = [desc[0] for desc in cur.description]

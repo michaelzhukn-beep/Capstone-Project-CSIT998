@@ -82,6 +82,7 @@ All endpoints are under `http://localhost:8000`. The streaming endpoints return
 | `POST /api/refine` | `{thread_id, params, lang, removed_attributes}` | re-run with edited filters, no LLM parsing (stream) |
 | `POST /api/rebatch` | `{thread_id, offset, lang}` | next batch of the same shortlist; only re-explains (stream) |
 | `GET /api/property/{id}?lang=` | — | live detail for one property (used by favourites/compare) |
+| `GET /api/session/{thread_id}` | — | is this conversation still on the server? (`active`, `params`, shown ids) — used to restore after a page refresh |
 | `POST /api/measure` | `{origin:{q\|lat,lon,label}, target:{…}}` | resolve place names and measure straight-line distance |
 | `POST /api/recalc` | `{price, annual_rent, opex_rate, other_acquisition_costs}` | recompute costs/returns for one property without changing global settings |
 | `POST /api/assumptions` | `{opex_rate?, other_acquisition_costs?}` | change the server-wide assumptions |
@@ -98,7 +99,8 @@ The search function can also be used directly from Python:
 
 ```python
 from app.search.search import search_properties
-search_properties(semantic_query="quiet apartment close to the city", max_price=800_000, bedrooms=2)
+search_properties(semantic_query="quiet apartment close to the city", max_price=800_000, bedrooms=2,
+                  max_distance_cbd_km=10)   # optional: straight-line km to the CBD
 ```
 
 ## Tests
@@ -112,12 +114,14 @@ for f in tests/test_*.py; do python "$f" || echo "FAILED: $f"; done
 
 | Needs | Tests |
 |---|---|
-| nothing (offline) | `test_formulas`, `test_amenities`, `test_context`, `test_registry`, `test_refinement`, `test_*_offline` |
-| the database | `test_api`, `test_auth`, `test_orchestration`, `test_planning`, `test_property_detail`, `test_refinement_api`, `test_zones_crime` |
+| nothing (offline) | `test_formulas`, `test_amenities`, `test_context`, `test_registry`, `test_refinement`, `test_*_offline` (incl. paraphrases, exclusions, explanation facts) |
+| the database | `test_api`, `test_auth`, `test_cbd_distance_filter`, `test_orchestration`, `test_planning`, `test_property_detail`, `test_refinement_api`, `test_zones_crime` |
 | an LLM key | none. LLM calls are replaced with fixed responses. `tests/check_refinement_language.py` is an optional live-LLM check. |
 
 Node checks (`node tests/test_*.mjs` / `.cjs`) cover number formatting, i18n, the homepage
-scene and some UI flows. A few browser fixtures (`test_conversation_browser.mjs`,
+scene and some UI flows. `tests/test_*_browser.mjs` drive a real Chrome with real mouse events
+against a running server (`node tests/test_add_condition_browser.mjs 8000 zh`): compare,
+distance sort, CBD filter, map/card sync, detail docking, refresh restore, add-filter menu. A few browser fixtures (`test_conversation_browser.mjs`,
 `test_relative_browser.mjs`) are manual harnesses that need extra environment variables
 (see the top of each file).
 

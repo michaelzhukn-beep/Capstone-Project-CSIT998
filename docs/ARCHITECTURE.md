@@ -46,7 +46,7 @@
 | `app/auth/` | 账号(`passwords` scrypt、`store` 用户/会话表、`routes` `/api/auth/*`,登录失败限流)与收藏(`favorites` `/api/favorites/*`,快照只存事实字段,不对 properties 建外键) |
 | `app/i18n.py` | **服务端标签**的英文版 + `check()` 完整性自检 |
 | `app/web/` | 单页前端:`index.html` / `app.js` / `app.css` / `i18n.js`,外加 `auth.js`(登录注册弹窗)、`favorites.js`(收藏心与抽屉)、`map-glass.js`(毛玻璃矢量底图)。无构建步骤。 |
-| `app/web/showroom/` | 首屏白模沙盘:`showroom.mjs`(唯一的代码文件)+ 烘焙好的 GLB、贴图、相机 JSON。资产约 19MB,已入库 |
+| `app/web/showroom/` | 首屏白模沙盘:`showroom.mjs`(主渲染代码)、`asset-loading.mjs`(本次加载独立队列及模型清理顺序)+ 原 GLB、贴图、相机 JSON。模型/贴图约 19MB,已入库;`draco/` 保留 Three 0.170.0 原配解码器和许可证,从同站加载 |
 | `db/` | `docker-compose.yml`(pgvector/pg16,15432)、`schema.sql`、`setup_db.py`(一键建库)、`seed/properties.dump`(房源种子) |
 | `docs/en/` | 给组员的英文指南:功能、配置(换 LLM)、开发、排错。与根目录 `README.md` 一起是对外入口 |
 | `pipeline/` | 一次性数据抓取与基准构建脚本 |
@@ -220,8 +220,10 @@ maplibre-gl-leaflet,用 OpenFreeMap 的 positron 矢量样式逐图层改色后�
 二者都 `pointer-events:none`;取景内边距与磨砂宽度一致,房源落在中间通透区。
 选中房源只给图钉加中性光晕(原黄色颜料已撤,最终样式待所有者定)。
 
-首屏背景有两套,互为回退:宽屏(≥900px)且资产加载成功时用 `showroom.mjs` 的白模沙盘,
+首屏背景有两套,互为回退:桌面和手机支持 WebGL2 且资产加载成功时都用 `showroom.mjs` 的白模沙盘,
 否则用 `app.js` 里 `drawCity()` 生成的 SVG 城市。切换由 `<div id="app">` 上的
-`data-showroom="ready"` 驱动,CSS 决定谁可见。
+`data-showroom="ready"` 驱动,CSS 决定谁可见。手机共用原模型、贴图与构图,输入框保留窄屏可用宽度;初始化、显示及转场交互不再受 900px 门槛限制。
+支持判断使用唯一实际 renderer,创建失败保留 SVG,不额外分配 WebGL 探测上下文。182 个内嵌图像与外部贴图共用本次加载的并发 2 队列,成功或失败均释放 slot;不改全局加载器。DRACO 上限 1 worker,即使模型先失败,也等待另一个解析及已提交的解码任务结束,拒绝关闭后的新任务,再释放 worker。
+城市目标保持原 DPR 上限 2 与 4×MSAA;户型目标在首次可见转场帧才克隆分配,首屏使用透明 1×1 占位贴图。后续转场与退出重入复用同一目标,resize 同步尺寸。全部原贴图仍会解码和驻留;限并发不等于降低最终显存需求。
 
 注意:Leaflet 的全局是 `L`,所以文案表叫 `T`,不要再引入名为 `L` 的局部变量。

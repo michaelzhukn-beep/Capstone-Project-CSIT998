@@ -451,6 +451,21 @@ class RecalcIn(BaseModel):
     other_acquisition_costs: float
 
 
+@app.get("/api/session/{thread_id}")
+async def session_state(thread_id: str):
+    """刷新页面后,前端问「这个对话在服务端还在不在」(外部测试第 9 项)。
+
+    只读,不跑图、不调 LLM。会话存在进程内存里(MemorySaver),服务重启就没了 ——
+    这时返回 active=false,前端会按自己保存的条件重新搜一次,把两边对齐。
+    ids 是当前展示那批房源的编号,前端拿来核对自己保存的结果是不是同一批。
+    """
+    values = (await asyncio.to_thread(GRAPH.get_state, new_session(thread_id))).values or {}
+    params = values.get("params") or None
+    return {"active": bool(params), "params": params,
+            "batch_offset": int(values.get("batch_offset") or 0),
+            "ids": [m.get("id") for m in values.get("metrics") or []]}
+
+
 @app.get("/api/property/{property_id}")
 async def property_detail(property_id: int, lang: str = "zh"):
     """一套房的完整详情数据,与搜索结果同一口径(收藏夹里不在当前结果中的房源用)。

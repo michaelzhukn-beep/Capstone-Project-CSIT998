@@ -47,7 +47,7 @@ Then:
 
 ```bash
 python serve.py                 # http://localhost:8000
-python serve.py --port=8600     # 8600 is what .claude/launch.json uses (8520 fell into an excluded range on 2026-09-30)
+python serve.py --port=8900     # 8900 is what .claude/launch.json uses (8520 and later 8600 fell into excluded ranges, 2026-09-30 / 2026-10-05)
 python share.py                 # server + Cloudflare tunnel, prints a public URL
 ```
 

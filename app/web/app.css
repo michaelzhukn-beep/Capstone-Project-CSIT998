@@ -216,26 +216,24 @@ button:disabled { transform: none; }
 .hero-meta i { width: 7px; height: 7px; border: 1px solid currentColor; }
 .hero-meta i.fill { background: currentColor; }
 
-/* ---------- 宽屏首屏:城市沙盘版式(showroom.mjs 加载成功后才生效)---------- */
+/* ---------- 首屏:城市沙盘版式(桌面与手机共用)(showroom.mjs 加载成功后才生效)---------- */
 .showroom { display: none; }
-@media (min-width: 900px) {
-  [data-stage="welcome"][data-showroom="ready"] .col-chat { grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: clamp(12px, 2.5svh, 40px) auto auto minmax(0, 1fr); }
-  [data-stage="welcome"][data-showroom="ready"] .col-chat::before,
-  [data-stage="welcome"][data-showroom="ready"] .col-chat::after,
-  [data-showroom="ready"] .hero-rail, [data-showroom="ready"] .hero-city,
-  [data-stage="welcome"][data-showroom="ready"] .drift-caption,
-  [data-stage="welcome"][data-showroom="ready"] .hero-foot,
-  [data-stage="welcome"][data-showroom="ready"] .hero-meta { display: none; }
-  [data-stage="welcome"][data-showroom="ready"] .showroom { display: block; position: absolute; inset: 0; z-index: 0; }
-  [data-showroom="ready"] .hero-copy { grid-column: 1; grid-row: 2; align-self: start; justify-self: center;
-    width: min(760px, 80%); margin: 0; text-align: center; }
-  [data-showroom="ready"] .welcome-h { font-size: clamp(30px, 2.6vw, 46px); line-height: 1.25; }
-  [data-showroom="ready"] .welcome-h br { display: none; }
-  [data-showroom="ready"] .welcome-p { margin-top: 6px; font-size: 13.5px; line-height: 1.65; }
-  [data-stage="welcome"][data-showroom="ready"] .composer { grid-column: 1; grid-row: 3; justify-self: center;
-    width: min(680px, 58%); margin: clamp(10px, 1.8svh, 20px) 0 0; }
-}
+[data-stage="welcome"][data-showroom="ready"] .col-chat { grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: clamp(12px, 2.5svh, 40px) auto auto minmax(0, 1fr); }
+[data-stage="welcome"][data-showroom="ready"] .col-chat::before,
+[data-stage="welcome"][data-showroom="ready"] .col-chat::after,
+[data-showroom="ready"] .hero-rail, [data-showroom="ready"] .hero-city,
+[data-stage="welcome"][data-showroom="ready"] .drift-caption,
+[data-stage="welcome"][data-showroom="ready"] .hero-foot,
+[data-stage="welcome"][data-showroom="ready"] .hero-meta { display: none; }
+[data-stage="welcome"][data-showroom="ready"] .showroom { display: block; position: absolute; inset: 0; z-index: 0; }
+[data-showroom="ready"] .hero-copy { grid-column: 1; grid-row: 2; align-self: start; justify-self: center;
+  width: min(760px, 80%); margin: 0; text-align: center; }
+[data-showroom="ready"] .welcome-h { font-size: clamp(30px, 2.6vw, 46px); line-height: 1.25; }
+[data-showroom="ready"] .welcome-h br { display: none; }
+[data-showroom="ready"] .welcome-p { margin-top: 6px; font-size: 13.5px; line-height: 1.65; }
+[data-stage="welcome"][data-showroom="ready"] .composer { grid-column: 1; grid-row: 3; justify-self: center;
+  width: min(680px, 58%); margin: clamp(10px, 1.8svh, 20px) 0 0; }
 .showroom-view, .showroom-view canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .showroom-signs { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
 /* 转场箭头:贴在画面左右边缘中部,常态很淡,悬停才显形 */
@@ -290,6 +288,7 @@ button:disabled { transform: none; }
   [data-stage="welcome"] .drift-caption { grid-column: 1; grid-row: 4; justify-self: center; margin: 14px 0 0; }
   [data-stage="welcome"] .hero-foot { grid-column: 1; grid-row: 5; margin: 14px 0 20px; }
   [data-stage="welcome"] .hero-meta { display: none; }
+  [data-stage="welcome"][data-showroom="ready"] .composer { width: calc(100% - 32px); }
 }
 @media (max-width: 599px) {
   .drift-slot { max-width: 200px; }
@@ -609,6 +608,19 @@ button:disabled { transform: none; }
   border-left: 4px solid transparent; border-right: 4px solid transparent;
   border-top: 7px solid var(--ink); }
 .pin.on { z-index: 1000 !important; }      /* Leaflet 把 z-index 写在行内,只能 !important 压 */
+/* 悬停联动:指着房卡时同号图钉放大并浮到最上层;指着图钉时同号房卡描边。
+   只用 transform / box-shadow / border,看得见与否不依赖动画。 */
+.pin.hl { z-index: 1001 !important; }
+.pin.hl .pin-badge { transform: scale(1.18); box-shadow: 0 0 0 2px #fff, 0 0 0 6px rgba(29, 29, 31, .16), 0 3px 10px rgba(0, 0, 0, .3); }
+.pin-badge { transition: transform 140ms var(--ease-out), box-shadow 140ms var(--ease-out); }
+.card.hl { border-color: var(--ink); }
+.nowrap { white-space: nowrap; }
+/* 「+ 添加条件」菜单:一列可点的条件名,底部一个「在对话里说」的出口 */
+.add-menu { display: flex; flex-direction: column; gap: 2px; margin: 4px -6px 6px; max-height: 52vh; overflow: auto; }
+.add-menu-item { text-align: left; border: 0; background: transparent; padding: 9px 10px; border-radius: 9px;
+  font: inherit; font-size: 14px; color: var(--ink); cursor: pointer; }
+.add-menu-item:hover, .add-menu-item:focus-visible { background: var(--chip); outline: none; }
+.add-menu-chat { display: block; margin-top: 4px; padding: 6px 4px; border: 0; background: none; font-size: 13px; cursor: pointer; }
 .pin.on .pin-badge { box-shadow: 0 0 0 2px #fff, 0 0 0 7px rgba(29, 29, 31, .13), 0 3px 10px rgba(0, 0, 0, .3); }
 
 .leaflet-container { font: inherit; }
@@ -947,6 +959,10 @@ button:disabled { transform: none; }
     transform: translate3d(var(--dx, 0px), var(--dy, 0px), 0) scale(1);
     transition: opacity var(--pop) var(--ease-out), transform var(--pop) var(--ease-out);
   }
+  /* 工作区里贴在对话栏上(位置由 app.js dockDetail 按栏的实际尺寸量出来),
+     列表和地图完整露着。仍可拖走;并排对比时 --dw 加宽到「对话 + 列表」。 */
+  .detail.docked { left: var(--dl); top: var(--dt); right: auto; width: var(--dw); max-height: var(--dh); }
+  .detail.docked.compare { width: var(--dw); max-height: var(--dh); }
   /* 拖动时必须掐掉过渡,否则窗子会拖一下慢半拍地追过来 */
   .detail.dragging { transition: none; }
   .detail .grabber { display: none; }

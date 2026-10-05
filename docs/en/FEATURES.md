@@ -31,11 +31,13 @@ The assistant understands:
 | Kind of request | Examples | How it's handled |
 |---|---|---|
 | **Hard filters** | budget, bedrooms, bathrooms, property type, suburb | exact SQL filters, never violated |
-| **Distance to a place type** | "within 800 m of a train station", "near a school" | straight-line distance from OpenStreetMap data |
+| **Distance to a place type** | "within 800 m of a train station", "preferably close to a primary school" | straight-line distance from OpenStreetMap data; any phrasing of "close to <type>" becomes the same filter (default 1,500 m) |
+| **Distance to the CBD** | "within 20 km of the CBD" | straight-line km, the same number the detail panel shows |
 | **Lifestyle qualities** (15) | quiet, lively, convenient, shopping, green, beach access, transport, school access, medical, fitness, spacious, family-friendly, away from industry, low crime, away from cemeteries | scored 0–100 from real geographic evidence (percentile against the whole city) |
 | **School zones / planning** | "in the X school zone", "no heritage overlay" | official catchment and planning-zone data |
+| **Exclusions** | "no airport noise", "avoid flood zones", "exclude anything with a bushfire overlay" | hard exclusion by risk-overlay category (airport noise, flood, bushfire, acquisition, contamination, erosion); "no" always means removed, never just "preferably" |
 | **Free description** | "renovated-looking period home" | semantic vector search over the listing descriptions |
-| **Sorting** | cheapest, most expensive, best rental yield, best ROI | deterministic ranking in code |
+| **Sorting** | cheapest, most expensive, best rental yield, best ROI, "closest to the station first" | deterministic ranking in code |
 
 **Unsupported questions are named, not guessed.** For example: sunlight or aspect,
 renovation condition, school rankings, street-level crime, air or noise measurements,
@@ -47,12 +49,18 @@ says these can't be answered from the data.
 - **Streaming answer.** The explanation appears word by word. It cites properties by number
   (e.g. "#2 and #4 …"), and clicking a number highlights those cards.
 - **Condition card** ("Current filters"). Every filter the assistant applied is shown as a
-  chip and can be removed or edited directly. "Add condition" lets you add one by hand, and
-  required vs preferred conditions are marked.
+  chip and can be removed or edited directly, and required vs preferred conditions are marked.
+  **"+ Add a filter"** opens a menu of the filters not set yet (budget, rooms, type, suburb,
+  CBD distance, distance to a place type, neighbourhood score, planning/risk exclusions); each
+  applies immediately without going through the LLM.
 - **Property cards** show suburb, address, price, bedrooms/bathrooms/type, reference rent,
   gross yield, distance to the relevant amenity, and badges such as *"valuation 15% above
   sale price"*. Planning or heritage warnings appear as notes.
-- **Sort menu**: relevance, price ↑/↓, gross yield, ROI.
+- **Sort menu**: relevance, price ↑/↓, gross yield, ROI, neighbourhood scores, and distance
+  sorts that match the current filters (e.g. *"distance to train station, nearest first"* when a
+  station filter is active; *"distance to Monash University"* only when you named that place).
+- **Refreshing the page keeps everything**: the conversation, filters, results and map come back,
+  and follow-ups continue from them. "New chat" clears it.
 - **"Next batch"** pages through the rest of the shortlist (5 at a time).
 - **Answer history.** Earlier answers keep their own result set, and you can reopen them and return to the latest.
 
@@ -79,12 +87,15 @@ Keep talking and the assistant edits the current search instead of starting over
   - Panel footer: city selector and result count.
   - The city selector currently has Melbourne only; other cities are listed as *coming soon*.
 - Controls: **show all results**, zoom in, zoom out. Clicking a card focuses the map on that
-  property and highlights its pin; clicking a pin opens the details.
+  property and highlights its pin; clicking a pin opens the details **and scrolls the list to
+  that card**. Hovering a card highlights its pin, and vice versa.
 - If WebGL is unavailable, the map falls back to standard OpenStreetMap tiles automatically.
 
 ## 6. Property detail panel
 
-A draggable panel (bottom sheet on narrow screens) in five sections:
+A panel that docks over the chat column on the results page, so the list and map stay fully
+visible (it can still be dragged; bottom sheet on narrow screens). The header line shows rooms,
+type, distance to the CBD and, where the dataset records them, **land and floor area**. Five sections:
 
 1. **Price range.** Historical sale price, the **model valuation** (XGBoost, trained on the
    dataset) and its **80% confidence range**, plus a plain-language verdict ("price normal",
@@ -122,7 +133,7 @@ Each number carries its origin label: measured/statutory, assumption, or model.
 - Click **"+ Compare"** in a detail panel and pick up to **3** properties from the current
   results or your favourites.
 - The columns are aligned section by section, with a **"differences only"** toggle and
-  the best value in each row marked.
+  the best value in each row marked. The comparison covers the chat and list columns; the map stays visible.
 
 ## 9. Other ways to run it
 

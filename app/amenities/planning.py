@@ -152,6 +152,23 @@ _OVERLAY_FAMILIES = {
 }
 _OVERLAY_BY_LEN = sorted(_OVERLAY_FAMILIES, key=len, reverse=True)
 
+# 风险类叠加层按「用户会怎么说」分组,好让「不要机场噪音」只排除机场噪声那一类,
+# 而不是把洪泛、山火也一起排掉(那是 no_risk_overlay 的事)。每组都是上表里的 risk 家族。
+RISK_GROUPS = {
+    "airport_noise": ("机场噪声叠加层", ("AEO", "MAEO")),
+    "flood":         ("洪泛/内涝叠加层", ("LSIO", "FO", "RFO", "SBO")),
+    "bushfire":      ("山火管理叠加层", ("BMO",)),
+    "acquisition":   ("政府征收叠加层", ("PAO",)),
+    "contamination": ("土壤污染(须环境审计)叠加层", ("EAO",)),
+    "erosion":       ("侵蚀/盐渍化管理叠加层", ("EMO", "SMO")),
+}
+assert all(_OVERLAY_FAMILIES[f][1] == "risk" for _, fams in RISK_GROUPS.values() for f in fams)
+
+
+def has_family(info: dict, families) -> bool:
+    """这块地上有没有属于这几个家族的叠加层。"""
+    return any(o.get("family") in families for o in (info or {}).get("overlays", []))
+
 _data: dict | None = None
 
 

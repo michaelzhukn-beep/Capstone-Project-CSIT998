@@ -104,6 +104,9 @@ def _attr_label(state, attr: str) -> str:
 
 
 def _sort_label(state, key: str) -> str:
+    place = ((state or {}).get("params") or {}).get("near_place")
+    if key == "near_place_distance" and place:      # 「指定地点」要说出是哪一个
+        return _t(state, f"离「{place['name']}」从近到远", f"Distance to {place['name']}, nearest first")
     return (i18n.sort_labels_en(_SORT_LABEL)[key] if _en(state) else _SORT_LABEL[key])
 
 
@@ -297,7 +300,7 @@ def _ask_streaming(system: str, user: str, temperature: float = 0.0) -> str:
 # 那是 Member B 的跨线契约。
 SEARCH_KEYS = (
     "semantic_query", "max_price", "min_price",
-    "bedrooms", "bathrooms", "property_type", "suburb",
+    "bedrooms", "bathrooms", "property_type", "suburb", "max_distance_cbd_km",
 )
 # V2 新增:排序与指标门槛。这两个**不进数据库**,因为它们依赖的是算出来的指标
 # (回报率、Cap Rate),而不是表里的列。所以它们在 rank 节点里生效。
@@ -346,8 +349,20 @@ _PLANNING_NEEDS = {
     "no_risk_overlay": (
         "没有已登记的风险叠加层(政府征收、洪泛、山火、土壤污染等)",
         lambda info: "zone" in info and not planning.risks(info)),
+    # 按类别精确排除(外部测试第 7 项:「不要机场噪音」「有机场噪音叠加层的全部排除」以前只能变成
+    # 「最好安静」这类评分偏好,带机场噪声叠加层的房子照样出现)。都是硬条件,和上面三条一样在 rank 里剔除;
+    # 没有规划数据的房源证明不了「没有」,一并剔除并在口径里写明。
+    **{"no_" + key: (f"没有{label}",
+                     (lambda fams: lambda info: "zone" in info and not planning.has_family(info, fams))(fams))
+       for key, (label, fams) in planning.RISK_GROUPS.items()},
 }
 _SORT_FIELDS = _SORT_FIELDS + _ABSTRACT_KEYS
+# 按到某一类设施(amenity_needs 里那一类)的直线距离从近到远:"nearest:train_station"。
+# 只有这一类在 amenity_needs 里时才有效 —— 距离只对它们在 enrich 里算全量,
+# 而卡片上显示的「火车站 836 m」也正是这个数。和 near_place_distance(点名的**某一个**地点)不是一回事。
+NEAREST_PREFIX = "nearest:"
+_AMENITY_SORTS = tuple(NEAREST_PREFIX + k for k in nearby.KINDS)
+_SORT_FIELDS = _SORT_FIELDS + _AMENITY_SORTS
 
 _PARSE_SYSTEM = """你是房产搜索的参数抽取器。把用户的中文或英文问题转成结构化搜索参数。
 
@@ -403,7 +418,12 @@ _PARSE_SYSTEM = """你是房产搜索的参数抽取器。把用户的中文或�
                                     他说出口的话和拿到的结果是反的,而且没人会发现。
                    "price_asc"      便宜的优先(用户说"最便宜""预算紧")
                    "price_desc"     贵的优先(用户说"最好的""不差钱")
-                   "near_place_distance"  离 near_place 最近的优先
+                   "near_place_distance"  离 near_place(**点名的某一个地点**)最近的优先
+                   "nearest:<kind>"  离某一类设施最近的优先,<kind> 必须是同时写进 amenity_needs 的那一类,
+                                    例如用户说"离火车站越近越好""按到车站的距离排" →
+                                    sort_by = "nearest:train_station" 且 amenity_needs 含 train_station。
+                                    **只有用户明确要求按远近排序/比较("越近越好""最近的排前面""按距离排")才填**;
+                                    只说"近车站""车站附近"是距离门槛(amenity_needs),sort_by 照常按其他线索填或填 null
                    或下面 abstract_needs 清单里的任一属性名,按该属性从高到低排序
                    (用户说"最安静的""通勤最方便的""最适合家庭的"时用)
                    用户提了环境要求但没有"最"这类比较级时,可以填对应属性,
@@ -420,6 +440,9 @@ _PARSE_SYSTEM = """你是房产搜索的参数抽取器。把用户的中文或�
                    例:"有小孩,要离幼儿园和小学近"
                      -> [{"kind":"kindergarten","max_distance_m":1500},
                          {"kind":"primary_school","max_distance_m":1500}]
+                   点出了具体设施类别时,"离小学近""最好离小学近一点""最好小学近一点""小学近点"
+                   **都填这一项、同一个距离**("最好""一点"不改变结果);
+                   只说"学校/教育配套好"、没点出哪类学校时,才用 abstract_needs 的 school_access。
   abstract_needs : 数组,用户对**居住环境**的要求。没有就填 []。
                    每项形如 {"attribute": "quiet", "min_score": 60, "operator": "gte"}。
                    operator 可为 gte(≥)、gt(>)、lte(≤)、lt(<)、eq(=);未指定则默认 gte。
@@ -435,7 +458,7 @@ _PARSE_SYSTEM = """你是房产搜索的参数抽取器。把用户的中文或�
 
                    一句话里可以对应多个属性:
                      "带孩子住,要安静点,最好附近有小学"
-                       -> family + quiet + school_access
+                       -> family + quiet(小学点了具体类别,进 amenity_needs: primary_school 1500)
                      "上班方便、楼下能买菜的一居"
                        -> transport + convenient
 
@@ -478,14 +501,19 @@ _PARSE_SYSTEM = """你是房产搜索的参数抽取器。把用户的中文或�
                    例:"80 万以内、4 房、Toorak、步行 5 分钟到 CBD"
                      -> max_price / bedrooms / suburb 照填,
                         amenity_needs = [](**不许**拿火车站顶替),
-                        unsupported_asks = ["步行时间", "到 CBD 的距离要求"]
+                        max_distance_cbd_km = null(时间不是距离,**不许**换算成公里),
+                        unsupported_asks = ["步行时间"]
+  max_distance_cbd_km: 数字或 null —— 到墨尔本 CBD 的**直线**距离上限,单位公里。
+                   用户给了数字才填:"离 CBD 20 公里以内" -> 20,"within 10 km of the city" -> 10。
+                   没给数字的"离市中心近"不填(那是 transport 等属性的事)。
+                   "步行/开车 N 分钟到 CBD"是**时间**不是距离,不填,写进 unsupported_asks(步行时间)。
   school_zone    : 对象或 null —— 用户要求房子落在**某所公立学校的招生学区内**。
                    形如 {"school": "Balwyn Primary School", "level": "primary"}
                    level 是 "primary"(小学)或 "secondary"(中学),不确定填 null。
                    school 要翻成英文校名。
 
                    **这和 school_access 是两件事,别弄混:**
-                     "附近有小学吗"          -> abstract_needs 的 school_access(距离)
+                     "附近有小学 / 离小学近"   -> amenity_needs 的 primary_school(直线距离)
                      "要在 Balwyn 小学学区内" -> school_zone(招生边界内,是个事实)
                    澳洲说的"学区"指后者。实测只有 54% 的房源"最近的小学"就是
                    "所属学区的小学" —— 拿距离回答学区,近一半会答错。
@@ -506,11 +534,22 @@ _PARSE_SYSTEM = """你是房产搜索的参数抽取器。把用户的中文或�
                      "low_density_around" 周边法律上不会盖起高楼。
                                           例:"以后不会被挡"、"周围别变成高楼"、
                                               "希望周边一直保持低矮"
-                     "no_risk_overlay"    这块地没有已登记的风险叠加层
-                                          (政府将来征收、洪泛、山火、土壤污染)。
-                                          例:"别买到要拆迁的"、"不要淹水的地方"
+                     "no_risk_overlay"    这块地没有**任何**已登记的风险叠加层
+                                          (政府将来征收、洪泛、山火、土壤污染、机场噪声……)。
+                                          例:"不要任何风险叠加层"、"风险越少越好"
+                     下面这几个是**单一类别**的排除,用户点名哪一类就只填哪一类:
+                     "no_airport_noise"   没有机场噪声叠加层。例:"不要机场噪音"、"避开机场噪声区"、
+                                          "有机场噪音叠加层的全部排除"
+                     "no_flood"           没有洪泛/内涝叠加层。例:"不要淹水的地方"、"避开洪水区"
+                     "no_bushfire"        没有山火管理叠加层。例:"不要山火风险"
+                     "no_acquisition"     没有政府征收叠加层。例:"别买到要被征收/拆迁的"
+                     "no_contamination"   没有土壤污染(须环境审计)叠加层。例:"不要土壤污染"
+                     "no_erosion"         没有侵蚀/盐渍化管理叠加层
 
-                   **只有这三个值,不要发明第四个。** 用户提的其它"未来"类要求
+                   **"不要 / 避开 / 排除 / 不能有" + 上面任一类风险 = 对应的 planning_needs(硬排除)**,
+                   不要改写成 quiet、away_industry 这类评分偏好 —— 评分只是「最好」,
+                   房子照样会出现,用户说的「不要」就落空了。
+                   **只有上面这些值,不要发明新的。** 用户提的其它"未来"类要求
                    (房价会不会涨、地铁会不会修过来、学校会不会变好)一律放进
                    unsupported_asks —— 分区数据说的是"法律上能盖什么",
                    **不是**"会不会涨"。这两件事不要混。
@@ -546,42 +585,42 @@ max_price=null 的意思是"不筛价格";max_price=0 的意思是"要 0 元以�
 
 例(第一轮,没有历史):
 用户:帮我找 80 万以下、租金回报不错的两房
-{"intent": "new_search", "semantic_query": "two bedroom investment property", "max_price": 800000, "min_price": null, "bedrooms": 2, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "gross_yield", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
+{"intent": "new_search", "semantic_query": "two bedroom investment property", "max_price": 800000, "min_price": null, "bedrooms": 2, "bathrooms": null, "property_type": null, "suburb": null, "max_distance_cbd_km": null, "sort_by": "gross_yield", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
 
 例(接着上一轮,用户说"再便宜点,而且要离火车站近"):
 {"intent": "refine", "changes": [{"action": "relative", "field": "price", "direction": "decrease", "degree": "slight", "source": "再便宜点"}, {"action": "set", "field": "amenity_needs", "value": {"kind": "train_station", "max_distance_m": 800}, "source": "离火车站近"}], "clarification": null}
 
 例(用户:我有小孩,想找离莫纳什大学近、附近有小学的三房):
-{"intent": "new_search", "semantic_query": "family home", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "near_place_distance", "min_gross_yield": null, "amenity_needs": [{"kind": "primary_school", "max_distance_m": 1500}], "near_place": {"name": "Monash University", "kind": "university", "max_distance_m": null}, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
+{"intent": "new_search", "semantic_query": "family home", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": null, "suburb": null, "max_distance_cbd_km": null, "sort_by": "near_place_distance", "min_gross_yield": null, "amenity_needs": [{"kind": "primary_school", "max_distance_m": 1500}], "near_place": {"name": "Monash University", "kind": "university", "max_distance_m": null}, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
 
 例(用户:安静一点的三房独栋,别靠马路):
-{"intent": "new_search", "semantic_query": "three bedroom house", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": "house", "suburb": null, "sort_by": "quiet", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "quiet", "min_score": 60}], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
+{"intent": "new_search", "semantic_query": "three bedroom house", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": "house", "suburb": null, "max_distance_cbd_km": null, "sort_by": "quiet", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "quiet", "min_score": 60}], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
 
 例(用户:找个热闹、生活方便的公寓):
-{"intent": "new_search", "semantic_query": "apartment", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": "apartment", "suburb": null, "sort_by": "lively", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "lively", "min_score": 60}, {"attribute": "convenient", "min_score": 60}], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
+{"intent": "new_search", "semantic_query": "apartment", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": "apartment", "suburb": null, "max_distance_cbd_km": null, "sort_by": "lively", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "lively", "min_score": 60}, {"attribute": "convenient", "min_score": 60}], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
 
 例(用户:带孩子住,要安静点,最好附近有小学,采光也要好):
-{"intent": "new_search", "semantic_query": "family home", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "family", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "family", "min_score": 60}, {"attribute": "quiet", "min_score": 60}, {"attribute": "school_access", "min_score": 60}], "unsupported_asks": ["采光"], "school_zone": null, "planning_needs": [], "description_query": null}
+{"intent": "new_search", "semantic_query": "family home", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "max_distance_cbd_km": null, "sort_by": "family", "min_gross_yield": null, "amenity_needs": [{"kind": "primary_school", "max_distance_m": 1500}], "near_place": null, "abstract_needs": [{"attribute": "family", "min_score": 60}, {"attribute": "quiet", "min_score": 60}], "unsupported_asks": ["采光"], "school_zone": null, "planning_needs": [], "description_query": null}
 
 例(用户:父母要住,看病方便点,房子得宽敞,治安也重要):
-{"intent": "new_search", "semantic_query": "spacious home", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "medical", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "medical", "min_score": 60}, {"attribute": "spacious", "min_score": 60}], "unsupported_asks": ["治安"], "school_zone": null, "planning_needs": [], "description_query": null}
+{"intent": "new_search", "semantic_query": "spacious home", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "max_distance_cbd_km": null, "sort_by": "medical", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "medical", "min_score": 60}, {"attribute": "spacious", "min_score": 60}], "unsupported_asks": ["治安"], "school_zone": null, "planning_needs": [], "description_query": null}
 
 例(用户:要在 Balwyn 小学学区内的三房):
-{"intent": "new_search", "semantic_query": "three bedroom home", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": {"school": "Balwyn Primary School", "level": "primary"}, "planning_needs": [], "description_query": null}
+{"intent": "new_search", "semantic_query": "three bedroom home", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": null, "suburb": null, "max_distance_cbd_km": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": {"school": "Balwyn Primary School", "level": "primary"}, "planning_needs": [], "description_query": null}
 
 例(用户:想买个老房子推倒重建,周围以后别盖起高楼):
-{"intent": "new_search", "semantic_query": "older house for redevelopment", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": "house", "suburb": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": ["no_heritage", "low_density_around"], "description_query": "older house for redevelopment"}
+{"intent": "new_search", "semantic_query": "older house for redevelopment", "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": "house", "suburb": null, "max_distance_cbd_km": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": ["no_heritage", "low_density_around"], "description_query": "older house for redevelopment"}
 
 例(用户:找个安静的三房,别买到将来要拆迁或者会淹水的,顺便说下会不会升值):
-{"intent": "new_search", "semantic_query": "quiet three bedroom home", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": "quiet", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "quiet", "min_score": 60}], "unsupported_asks": ["升值潜力"], "school_zone": null, "planning_needs": ["no_risk_overlay"], "description_query": null}
+{"intent": "new_search", "semantic_query": "quiet three bedroom home", "max_price": null, "min_price": null, "bedrooms": 3, "bathrooms": null, "property_type": null, "suburb": null, "max_distance_cbd_km": null, "sort_by": "quiet", "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [{"attribute": "quiet", "min_score": 60}], "unsupported_asks": ["升值潜力"], "school_zone": null, "planning_needs": ["no_risk_overlay"], "description_query": null}
 (注意:"拆迁"和"淹水"都是 no_risk_overlay 能覆盖的**登记事实**;
  "会不会升值"是预测,分区数据答不了,进 unsupported_asks)
 
 例(用户:第 3 套为什么估值这么高):
-{"intent": "about_results", "semantic_query": null, "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
+{"intent": "about_results", "semantic_query": null, "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "max_distance_cbd_km": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
 
 例(用户:cap rate 是什么意思):
-{"intent": "concept", "semantic_query": null, "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
+{"intent": "concept", "semantic_query": null, "max_price": null, "min_price": null, "bedrooms": null, "bathrooms": null, "property_type": null, "suburb": null, "max_distance_cbd_km": null, "sort_by": null, "min_gross_yield": null, "amenity_needs": [], "near_place": null, "abstract_needs": [], "unsupported_asks": [], "school_zone": null, "planning_needs": [], "description_query": null}
 """
 
 
@@ -692,6 +731,11 @@ def _sanitize(raw: dict, user_query: str, *, preserve_property_parking=False,
         if isinstance(value, (int, float)) and value > 0:
             params[key] = int(value)
 
+    # 到 CBD 的直线距离上限(公里)。墨尔本都会区半径不过一百多公里,超出的当成误读丢掉,不硬筛。
+    cbd = raw.get("max_distance_cbd_km")
+    if isinstance(cbd, (int, float)) and not isinstance(cbd, bool) and 0 < cbd <= 200:
+        params["max_distance_cbd_km"] = round(float(cbd), 1)
+
     ptype = raw.get("property_type")
     if isinstance(ptype, str) and ptype.strip().lower() in _PROPERTY_TYPES:
         params["property_type"] = ptype.strip().lower()
@@ -801,6 +845,11 @@ def _sanitize(raw: dict, user_query: str, *, preserve_property_parking=False,
     # near_place_distance 排序离了 near_place 就没意义,降级成语义相关度
     if params["sort_by"] == "near_place_distance" and not params["near_place"]:
         params["sort_by"] = None
+    # 同理:按到某类设施的距离排,这一类必须在 amenity_needs 里(否则全量距离没算,排不了)
+    if (params["sort_by"] or "").startswith(NEAREST_PREFIX):
+        kind = params["sort_by"][len(NEAREST_PREFIX):]
+        if not any(n.get("kind") == kind for n in params.get("amenity_needs") or []):
+            params["sort_by"] = None
 
     return params
 
@@ -942,8 +991,10 @@ def parse_intent(state: State) -> dict:
     # 也无从"在上一轮基础上改"。
     if intent == "about_results" and not state.get("metrics"):
         intent = "new_search"
-    if intent == "refine" and not (state.get("params") or state.get("metrics")):
-        return clarify()
+    # 第一句就说「最好离小学近一点」,模型常因「一点」判成 refine。没有上一轮可改时,
+    # 以前直接拒绝(外部测试第 6 项);现在把这些修改应用到空条件上,当作新搜索。
+    # 相对调整(「再便宜点」)没有基准仍会被 apply_changes 拒绝 —— 那确实无从算起。
+    fresh = intent == "refine" and not (state.get("params") or state.get("metrics"))
 
     if intent == "clarify":
         message = raw.get("clarification")
@@ -982,6 +1033,9 @@ def parse_intent(state: State) -> dict:
             clean["relative_preferences"] = changed.get("relative_preferences")
         except (refinement.ClarifyChange, TypeError, ValueError, KeyError):
             return clarify()
+        if fresh:
+            return {"intent": "new_search", "params": clean, "refinement_base": None,
+                    "turn_notice": None, "history": history}
         return {"intent": intent, "params": clean, "refinement_base": refinement.snapshot(state),
                 "turn_notice": None, "history": history}
 
@@ -1341,6 +1395,7 @@ _SORT_LABEL = {
     "price_desc": "价格从高到低",
     "near_place_distance": "离指定地点从近到远",
     **registry.sort_labels(),
+    **{NEAREST_PREFIX + k: f"距{v}从近到远" for k, v in nearby.KIND_ZH.items()},
 }
 
 
@@ -1684,6 +1739,10 @@ def _rank_once(state: State) -> dict:
         elif sort_by == "near_place_distance":
             # 离指定地点越近越好,所以是升序 —— 和其他"越大越好"的指标相反
             key, reverse = (lambda m: (m.get("near_place") or {}).get("distance_m")), False
+        elif sort_by.startswith(NEAREST_PREFIX):
+            # 到某类设施的最近距离,升序。enrich 已对全部候选算过这一类(它在 amenity_needs 里)
+            kind = sort_by[len(NEAREST_PREFIX):]
+            key, reverse = (lambda m: ((m.get("amenities") or {}).get(kind) or {}).get("distance_m")), False
         else:
             key, reverse = (lambda m: m.get(sort_by)), True
         usable = [m for m in metrics if key(m) is not None]
@@ -1836,6 +1895,8 @@ _EXPLAIN_SYSTEM = """你是房产投资助手。下面会给你一份已经算�
 1. **只能使用给定 JSON 里出现的数字。禁止计算、禁止推测、禁止补充任何未给出的数值。**
    不要自己算平均值、总价、月租、差额、涨幅 —— 一个都不要算。
 2. 某个指标的值是 null,就说"数据不足,暂无法计算",不要跳过、更不要编。
+   land_size(土地面积)、building_area(建筑面积)是数据集的记录值,null 表示**没有记录**,
+   不要说"没有土地",也不要拿房间数去推测面积。
 3. **数字分三类,措辞必须不同,这是本系统最重要的一条规则:**
    - price / bedrooms 等:来自真实成交记录,可以直接陈述。
    - **annual_rent 不是这套房自己的租金**,是一个参考值(周租金基准×52,或推算值),来源看 rent_source。
@@ -1885,6 +1946,8 @@ _EXPLAIN_SYSTEM = """你是房产投资助手。下面会给你一份已经算�
    - 分区是**当前**的,而成交价是 2016–2018 年的,不要把两者因果地连起来。
 7. 用户消息里会给出**本次结果的排序口径**。如果是按某个指标排的,要在开头
    一句话交代清楚(例如"以下按毛租金回报率从高到低排列")。
+   **提到排序方式时只能照这条口径说**:口径是"按语义相关度排序"时,不许说成按价格、
+   按离某处远近、按某个评分排 —— 结果实际是怎么排的,说明就怎么说。
    若口径里写明了"在语义最相关的 N 套候选里挑",也要如实带上这个限定,
    不能让用户误以为这是全库最高。
 8. 不要提到 JSON、字段名、id 这些技术细节。用"第 N 套""Glen Iris 这套"来指代。
@@ -1961,6 +2024,9 @@ def _no_result_answer(params: dict, en: bool = False) -> str:
         said.append(f"{params['bathrooms']} bath" if en else f"{params['bathrooms']} 卫")
     if params.get("property_type"):
         said.append(f"type {params['property_type']}" if en else f"类型 {params['property_type']}")
+    if params.get("max_distance_cbd_km"):
+        said.append(f"within {params['max_distance_cbd_km']:g} km of the CBD" if en
+                    else f"距 CBD {params['max_distance_cbd_km']:g} 公里内")
 
     if en:
         detail = ", ".join(said) if said else "the current filters"
@@ -2052,6 +2118,17 @@ def _assumption_lines(state, metrics) -> list[str]:
                f"Other acquisition costs excluding stamp duty (conveyancing, inspections etc.) of ${fees:,.0f} (same; stamp duty is calculated separately at statutory rates)")]
 
 
+_EXPLAIN_HIDDEN = ("car_spaces", "latitude", "longitude", "id")
+
+
+def _explain_fact(m: dict) -> dict:
+    fact = {k: v for k, v in m.items() if k not in _EXPLAIN_HIDDEN}
+    for key in ("land_size", "building_area"):
+        if not (isinstance(fact.get(key), (int, float)) and fact[key] > 0):
+            fact[key] = None
+    return fact
+
+
 def explain(state: State) -> dict:
     """LLM 把已算好的数字说成人话。它只解释,不产数字。
 
@@ -2095,9 +2172,11 @@ def explain(state: State) -> dict:
     # 给每套贴上**用户在界面上看到的编号**。翻到第三批时卡片是 11–15,
     # 模型如果按自己看到的顺序叫"第 1 套",就和卡片、地图全对不上。
     offset = int(state.get("batch_offset") or 0)
-    # 解释使用独立副本；车位不作为可展示事实，原 metrics / 估值输入保持不变。
-    numbered = [{"display_no": offset + i + 1, **{k: v for k, v in m.items() if k != "car_spaces"}}
-                for i, m in enumerate(metrics)]
+    # 解释使用独立副本;原 metrics / 估值输入保持不变。只给模型**页面上看得到**的事实
+    # (外部测试第 8 项:模型说「第 2 套土地略大」,而土地面积页面上根本没有,用户无从核对)。
+    # 车位不作为可展示事实;坐标和内部编号不是给用户看的。土地/建筑面积现在详情里有显示;
+    # 记录为 0 的是数据集没记(公寓尤其多),当作缺失,免得模型说「没有土地」。
+    numbered = [{"display_no": offset + i + 1, **_explain_fact(m)} for i, m in enumerate(metrics)]
     facts = json.dumps(numbered, ensure_ascii=False, indent=2, default=str)
     assumption_lines = "\n".join(f"  - {line}" for line in _assumption_lines(state, metrics))
     context = [f"用户的问题:{state['user_query']}"]

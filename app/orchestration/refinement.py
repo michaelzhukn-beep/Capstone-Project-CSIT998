@@ -11,9 +11,13 @@ from app.amenities import registry
 
 ATTRS = set(registry.ATTRIBUTE_KEYS)
 RELATIVE_FIELDS = ATTRS | {"price", "gross_yield", "cap_rate", "roi", "near_place_distance"}
-SCALARS = {"max_price", "min_price", "bedrooms", "bathrooms", "property_type", "suburb",
+SCALARS = {"max_price", "min_price", "bedrooms", "bathrooms", "property_type", "suburb", "max_distance_cbd_km",
            "min_gross_yield", "near_place", "school_zone", "semantic_query"}
 LIST_KEYS = {"amenity_needs": "kind", "planning_needs": None, "unsupported_asks": None}
+# 设施类别(小学、火车站……)。「离 X 近」无论怎么说都是同一种条件:amenity_needs 里的一项。
+AMENITY_KINDS = set(registry.USER_FACING_KINDS)
+DEFAULT_AMENITY_M = 1500        # 和提示词「没说距离就填 1500」同一个数
+NEAREST = "nearest:"
 
 PATCH_PROMPT = """
 ## 多轮修改协议(优先于前面的 refine 参数继承说明)
@@ -25,7 +29,7 @@ new_search 另填 description_query: 无法结构化的房子描述(如 balcony)
 changes 每项必须带 source: 用户本轮原话中逐字出现的短语(不翻译、不引用历史)。
 每项格式 {"action":"set/remove/relative/prioritize", "field":"...", "source":"...", ...}:
 - set: 新增或明确修改。field 为 max_price/min_price/bedrooms/bathrooms/property_type/
-  suburb/min_gross_yield/near_place/school_zone/semantic_query 或注册表属性(如 quiet)。
+  suburb/max_distance_cbd_km/min_gross_yield/near_place/school_zone/semantic_query 或注册表属性(如 quiet)。
   value 使用前述参数结构;属性 value 为 {"min_score":60,"operator":"gte",
   "strength":"preferred/required","value_source":"inferred/explicit"}。
   只有用户明确指定数字才为 explicit;模糊要求的默认门槛是 inferred。
@@ -43,6 +47,10 @@ changes 每项必须带 source: 用户本轮原话中逐字出现的短语(不�
   例如安静两房近公园后说“再热闹一点”:仅 relative lively increase slight;
   “没必要这么安静”:仅 relative quiet decrease slight;“再便宜一些”:relative price decrease slight。
   仍保留原有安静/预算等边界,需要放宽时交给用户明确选择。
+- 具体设施类别(小学、幼儿园、火车站、超市……)+“近”:不论说成“离小学近”“最好离小学近一点”
+  “最好小学近一点”“小学近点”,一律是 set amenity_needs(value {kind, max_distance_m},没给距离填 1500)。
+  这里的“一点/最好”不是相对调整;只有“离小学越近越好/最近的排前面”才再加 prioritize nearest:<kind>。
+  只说“学校/教育配套”而没点出哪类学校,才用 school_access 属性。
 - prioritize: “最/越……越好/优先/更重要”改变排序侧重,field 为排序口径或 price。
   price 必须提供 direction increase/decrease。不会删除任何筛选条件。
   “越热闹越好”仅 prioritize lively;“不要安静了,改找最热闹的”是 remove quiet + prioritize lively。
@@ -130,10 +138,54 @@ def snapshot(state):
         "place_lookup", "zone_lookup", "search_order", "roi_pool", "assumption_snap")})
 
 
+def normalize_amenity_changes(changes, params):
+    """「离小学近一点」「最好小学近一点」「小学近点」意思相同,模型却会写成三种操作:
+    set amenity_needs、field 直接写成 "primary_school"、或对 primary_school 做 relative/prioritize。
+    后两种不在白名单里,整轮被拒(外部测试第 6 项:同义说法一个成功一个失败)。
+    这里按确定性规则统一成 amenity_needs:
+      · set / relative 某类设施 → 设距离门槛(已有就收紧到约 2/3,没有就用默认 1500 米)
+      · prioritize 某类设施     → 设门槛(没有才设)+ 按到它的距离从近到远排
+      · remove 某类设施          → 删掉这一类的距离要求
+    其他操作原样返回。"""
+    if not isinstance(changes, list):
+        return changes
+    needs = {n.get("kind"): n for n in params.get("amenity_needs") or [] if isinstance(n, dict)}
+    out = []
+    for change in changes:
+        if not isinstance(change, dict):
+            out.append(change)
+            continue
+        action, field, value = change.get("action"), change.get("field"), change.get("value")
+        kind = field if field in AMENITY_KINDS else None
+        if field == "amenity_needs" and action in ("relative", "prioritize") and isinstance(value, dict):
+            kind = value.get("kind") if value.get("kind") in AMENITY_KINDS else None
+        if not kind:
+            out.append(change)
+            continue
+        base = {"source": change.get("source"), "field": "amenity_needs"}
+        if action == "remove":
+            out.append({**base, "action": "remove", "value": {"kind": kind}})
+            continue
+        given = value.get("max_distance_m") if isinstance(value, dict) else None
+        if isinstance(given, (int, float)) and not isinstance(given, bool) and given > 0:
+            dist = int(given)
+        elif action == "relative" and kind in needs and needs[kind].get("max_distance_m"):
+            dist = max(400, int(round(needs[kind]["max_distance_m"] * 2 / 3 / 100) * 100))
+        else:
+            dist = (needs.get(kind) or {}).get("max_distance_m") or DEFAULT_AMENITY_M
+        if action != "prioritize" or kind not in needs:
+            out.append({**base, "action": "set", "value": {"kind": kind, "max_distance_m": dist}})
+            needs[kind] = {"kind": kind, "max_distance_m": dist}
+        if action == "prioritize":
+            out.append({"action": "prioritize", "field": NEAREST + kind, "source": change.get("source")})
+    return out
+
+
 def apply_changes(previous, changes, query, rows, sanitize, sort_fields):
     """白名单+原文证据+逐项操作。任一操作无效整轮拒绝,不会半改半留。"""
     if not isinstance(changes, list) or not changes or len(changes) > 20:
         raise ClarifyChange("missing changes")
+    changes = normalize_amenity_changes(changes, previous)
     params = deepcopy(previous)
     params.pop("_conflict", None)
     goals = valid_goals(params.get("relative_preferences"))
@@ -174,6 +226,9 @@ def apply_changes(previous, changes, query, rows, sanitize, sort_fields):
                 raise ClarifyChange("unknown sort")
             if sort == "near_place_distance" and not params.get("near_place"):
                 raise ClarifyChange("missing named place")
+            if sort.startswith("nearest:") and not any(
+                    n.get("kind") == sort[len("nearest:"):] for n in params.get("amenity_needs") or []):
+                raise ClarifyChange("missing amenity requirement")
             params["sort_by"], goals = sort, []
             continue
         if action not in ("set", "remove"):
@@ -201,6 +256,10 @@ def apply_changes(previous, changes, query, rows, sanitize, sort_fields):
                 if not isinstance(value, str) or not value.strip():
                     raise ClarifyChange("missing list item")
                 items = [n for n in params.get(field) or [] if n != value]
+            # 删一项根本不存在的东西 = 什么都没改。以前静默通过,用户以为「全部排除」生效了,
+            # 其实条件原样(外部测试第 7 项:模型把「排除机场噪音」写成 remove unsupported_asks)。
+            if action == "remove" and len(items) == len(params.get(field) or []):
+                raise ClarifyChange("nothing to remove")
             if action == "set":
                 items.append(value)
             params[field] = items or None

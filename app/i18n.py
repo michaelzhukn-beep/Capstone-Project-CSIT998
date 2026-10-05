@@ -128,6 +128,12 @@ PLANNING_NEEDS_EN = {
     "no_heritage": "no overlay that restricts alterations",
     "low_density_around": "surrounded mainly by zones that limit density (high-rise is not legally possible)",
     "no_risk_overlay": "no registered risk overlay (acquisition, flooding, bushfire, contamination, etc.)",
+    "no_airport_noise": "no airport noise overlay",
+    "no_flood": "no flood / drainage overlay",
+    "no_bushfire": "no bushfire management overlay",
+    "no_acquisition": "no public acquisition overlay",
+    "no_contamination": "no soil-contamination (environmental audit) overlay",
+    "no_erosion": "no erosion / salinity management overlay",
 }
 
 PROPERTY_TYPES_EN = {"house": "House", "apartment": "Apartment", "townhouse": "Townhouse"}
@@ -148,7 +154,6 @@ UNSUPPORTED_KEY_EN = {
     "楼层视野": "floor level and views",
     "升值潜力": "capital growth forecasts",
     "步行/驾车时间": "walking or driving time",
-    "到 CBD 的距离要求": "a distance-to-CBD filter",
 }
 
 UNSUPPORTED_EN = {
@@ -172,9 +177,6 @@ UNSUPPORTED_EN = {
     "步行/驾车时间": "all distances are **straight-line**; there is no road network, so walking or "
                      "driving time cannot be computed. \"Close to X\" can be answered (as the crow "
                      "flies); \"N minutes' walk to X\" cannot",
-    "到 CBD 的距离要求": "straight-line kilometres to the CBD are in the database and feed the transport "
-                         "attribute, but there is **no standalone CBD-distance filter** — a request for "
-                         "\"within N km of the CBD\" has to be reported as unfilterable",
 }
 
 # ---------------------------------------------------------------- 规划分区与叠加层
@@ -269,6 +271,8 @@ def sort_labels_en(sort_labels: dict) -> dict:
     for key in sort_labels:
         if key in SORT_EN_FIXED:
             out[key] = SORT_EN_FIXED[key]
+        elif key.startswith("nearest:"):
+            out[key] = "Distance to " + KINDS_EN.get(key[len("nearest:"):], key).lower() + ", nearest first"
         else:
             out[key] = "“" + ATTRIBUTES_EN.get(key, key) + "” score, high to low"
     return out
