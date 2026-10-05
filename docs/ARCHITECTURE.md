@@ -3,7 +3,7 @@
 > 这份文件描述**系统现在实际是怎么工作的**。不写理想架构;真要写规划,标 `planned`。
 > 只在架构真的变了才更新(判据见 `AGENTS.md` §4)。
 
-最后更新:2026-10-01
+最后更新:2026-10-06
 
 ---
 
@@ -64,10 +64,15 @@
    事件经队列回到异步端,以 SSE 逐个下发
 3. 图依次跑:
    - `parse_intent` — LLM 把自然语言转成结构化参数(唯一一次解析用的 LLM 调用)
-   - `search` — pgvector 语义检索 + SQL 硬条件，初始候选上限5,000；ROI多取1条哨兵判截断，保存本请求假设快照
+   - `search` — pgvector 语义检索 + SQL 硬条件(含 `max_distance_cbd_km`:按坐标算球面直线公里、保留一位小数比较,
+     与页面「距 CBD」同口径,缺坐标退回数据集列),初始候选上限5,000；ROI多取1条哨兵判截断，保存本请求假设快照
    - `analyze` — 批量估值 + `formulas.investment_metrics()` 算全套投资指标
    - `enrich` — 对候选算周边证据、抽象属性分数、分项强度、全库排位、规划/学区
-   - `rank` — 筛选 + 排序，留前20套给"换一批"；ROI未能认证前20或筛空时在节点内翻倍重跑search/analyze/enrich，单轮上限40,000，给准确范围说明
+   - `rank` — 筛选 + 排序，留前20套给"换一批"；ROI未能认证前20或筛空时在节点内翻倍重跑search/analyze/enrich，单轮上限40,000，给准确范围说明。
+     条件分两档:`strength=required` 硬剔除;设施距离与环境偏好默认 `preferred`,不剔除,排序后由
+     `_prefer_amenities` 把满足项多的稳定前置,说明写「展示的 N 套中 M 套满足」(相对调整路径里环境偏好仍按门槛)。
+     规划条件(含 `planning.RISK_GROUPS` 六类按类排除)一律硬剔除。排序口径另有 `nearest:<kind>`(到 amenity_needs
+     里那类设施的距离升序)
    - `present` — 只给最终 5 套补展示用的设施名、学区、分区、罪案率
    - `explain` — LLM 写说明,**逐字流式**下发
 4. SSE 事件顺序:`node` → `params` → `ranking` → `more` → `results` → `token`* →
@@ -85,6 +90,7 @@
 | `POST /api/recalc` | 按给定假设重算一套房的投资指标 | 否 |
 | `POST /api/assumptions` | 改**进程级**假设 | 否 |
 | `GET /api/property/{id}?lang=` | 按编号实时算一套房的详情(`graph.detail_metrics`:analyze → enrich → present),收藏与并排详情用 | 否 |
+| `GET /api/session/{thread_id}` | 只读:该会话在服务端还在不在(`active`、`params`、当前展示房源 id),刷新页面后核对用 | 否 |
 | `POST /api/auth/register` · `login` · `logout`,`GET /api/auth/me` | 账号;会话令牌放 HttpOnly `nw_session` Cookie,库里只存 sha256 | 否 |
 | `GET/PUT/DELETE /api/favorites[/{property_id}]` | 收藏(需登录);PUT 时服务端从 properties 取快照 | 否 |
 | `GET /` + `/static/*` | 单页前端,带 `Cache-Control: no-cache` | 否 |
@@ -109,6 +115,12 @@ prioritize,每项必须带用户本轮原话里逐字出现的 `source`),**不�
 - **出错回滚**:`server._run` 在跑图前深拷贝会话状态,任何异常都整轮写回(含对话历史)。
 - 条件卡改动走 `/api/refine`:`prepare_refinement` 以卡片条件为准,删除的属性同时清掉
   对应排序与相对目标,并从保留下来的结构化条件重建英文检索描述。
+- **设施同义说法**:`refinement.normalize_amenity_changes` 在应用前把模型写成设施名字段、或对设施做
+  relative/prioritize 的变更确定性改写为 `amenity_needs`(默认 1500 米、「再近一点」收紧到约 2/3、
+  prioritize 另加 `nearest:` 排序)。
+- **首轮的 refine**:没有上一轮时,模型判成 refine 的变更应用到空条件上、作为 `new_search` 返回;
+  首轮对环境属性的 relative(「最好安静一点」)改成 preferred + 推断门槛 60;价格等相对调整没有基准仍澄清。
+- **删除不存在的条件**(列表项)抛 `ClarifyChange`,不再静默当成生效。
 
 `refine` / `rebatch` 都走 `GRAPH.update_state(..., as_node=...)`,把新状态当作某个节点的
 输出写进会话,再从它后面继续 —— 这是"不重跑整张图"的机制。
@@ -129,6 +141,10 @@ prioritize,每项必须带用户本轮原话里逐字出现的 `source`),**不�
 ROI候选使用formulas.roi_order_sql（由同一税档表生成的不取整式）预排序，最终指标/排序用investment_metrics。roi_pool记录截断cutoff、opex_rate、other_costs和limit；roi_certified_prefix仅认证无法被池外超过的前缀。费用太小或不能认证时扩容，超过40,000仍不能保证全局结果；循环只在rank节点内部，不向SSE推送中间半成品。
 
 search首次取得assumption_snap（opex_rate、other_costs、display），扩容/analyze/每套指标及解释沿用此快照；refinement.snapshot同时保存roi_pool/assumption_snap，回滚恢复旧指标和元数据，上限说明通过turn_notice交代。server done优先描述有效assumption_snap.display，旧状态退回第一条metrics.assumptions，均缺失时兼容使用一次捕获的当前全局快照；中文通过assumptions.describe(snap)公共纯格式入口。按ID详情的旧全局分次读取及解释ABA原子性仍未证明，不表示整个API已原子一致。真实扩容模型/几何成本未测；协调PG的一次候选SQL执行246.070ms只作局部证据。
+
+`explain` 只拿到页面上看得到的事实(`graph._explain_fact`):去掉车位、坐标、内部编号;土地/建筑面积
+记录为 0 视为缺失;附带 `area_suspect`(`graph.area_suspect` 判定自相矛盾的面积记录,`analyze` 里同一处算出、
+详情页显示「记录值存疑」)。提示词要求排序方式只能照 `ranking` 口径说。
 
 ## 抽象属性(安静/热闹/…)
 
@@ -225,5 +241,17 @@ maplibre-gl-leaflet,用 OpenFreeMap 的 positron 矢量样式逐图层改色后�
 `data-showroom="ready"` 驱动,CSS 决定谁可见。手机共用原模型、贴图与构图,输入框保留窄屏可用宽度;初始化、显示及转场交互不再受 900px 门槛限制。
 支持判断使用唯一实际 renderer,创建失败保留 SVG,不额外分配 WebGL 探测上下文。182 个内嵌图像与外部贴图共用本次加载的并发 2 队列,成功或失败均释放 slot;不改全局加载器。DRACO 上限 1 worker,即使模型先失败,也等待另一个解析及已提交的解码任务结束,拒绝关闭后的新任务,再释放 worker。
 城市目标保持原 DPR 上限 2 与 4×MSAA;户型目标在首次可见转场帧才克隆分配,首屏使用透明 1×1 占位贴图。后续转场与退出重入复用同一目标,resize 同步尺寸。全部原贴图仍会解码和驻留;限并发不等于降低最终显存需求。
+
+工作区交互(2026-10-05/06):
+- 详情窗在工作区由 `dockDetail` 贴在对话栏上(按栏实测尺寸,仍可拖),列表与地图完整可见;并排对比三栏布局盖
+  「对话 + 列表」、两栏布局只取够放 n 列的宽度。首页与窄屏不变。标题栏拖动在按下任何控件时不触发(否则
+  `setPointerCapture` 会吞掉栏内按钮的 click)。
+- 点地图图钉 = 开详情 + `focusCard` 把列表滚到同号房卡;房卡 ↔ 图钉悬停联动(`hlPin`/`hlCard`)。
+- 排序菜单由 `sortOptions` 按当前条件生成:只列条件里真有的 `nearest:<kind>`,点名地点才列「离「X」从近到远」。
+- 「+ 添加条件」打开 `openAddMenu`,只列未设的条件,复用条件卡的编辑框直接 `refine`(不经过 LLM)。
+- 刷新恢复:每轮回答后 `saveSession` 把「原话 + 完整回答 + 当轮结果快照」存 sessionStorage(最多 20 轮),
+  加载时沿用原 thread_id 逐轮重放(旧回答的编号仍指向当时那批),再查 `/api/session/{id}`,
+  服务端会话不在或不一致就按原条件自动 `refine` 一次;「新对话」清除。
+- 条件卡按实际行为分组:required 的设施距离/环境偏好与规划条件在「必须满足」,preferred 在「优先考虑」。
 
 注意:Leaflet 的全局是 `L`,所以文案表叫 `T`,不要再引入名为 `L` 的局部变量。
