@@ -86,3 +86,6 @@ design/white-city-try/**/backup-*/**
 !design/white-city/city-view.json
 !design/white-city/blender/city-04-manifest.json
 !design/white-city/blender/lighting-verification-city-05.json
+
+# Final report drafts (contain student numbers; keep out of the public repo)
+/report/
