@@ -171,7 +171,10 @@
    "abstract_needs": [
     {
      "attribute": "quiet",
-     "min_score": 60
+     "min_score": 60,
+     "operator": "gte",
+     "strength": "preferred",
+     "value_source": "inferred"
     }
    ],
    "amenity_needs": null,
@@ -203,7 +206,10 @@
    "abstract_needs": [
     {
      "attribute": "quiet",
-     "min_score": 60
+     "min_score": 60,
+     "operator": "gte",
+     "strength": "preferred",
+     "value_source": "inferred"
     }
    ],
    "amenity_needs": null,
@@ -290,7 +296,8 @@
    "amenity_needs": [
     {
      "kind": "train_station",
-     "max_distance_m": 500
+     "max_distance_m": 500,
+     "strength": "required"
     }
    ],
    "bathrooms": null,
@@ -322,7 +329,8 @@
    "amenity_needs": [
     {
      "kind": "tram_stop",
-     "max_distance_m": 1500
+     "max_distance_m": 1500,
+     "strength": "preferred"
     }
    ],
    "bathrooms": null,
@@ -525,7 +533,8 @@
    "amenity_needs": [
     {
      "kind": "train_station",
-     "max_distance_m": 800
+     "max_distance_m": 800,
+     "strength": "preferred"
     }
    ],
    "bathrooms": null,
@@ -542,42 +551,93 @@
   },
   "unsupported": [
    [
-    "步行时间"
+    "步行/驾车时间"
    ],
    [
-    "步行时间"
+    "步行/驾车时间"
    ],
    [
-    "步行时间"
+    "步行/驾车时间"
    ]
   ]
  },
  {
   "code": "K3",
   "q": "学校排名前十的学区房",
-  "status": "PASS",
-  "stable": true,
+  "status": "FAIL",
+  "stable": false,
   "errors": [],
-  "params": {
-   "abstract_needs": [
-    {
-     "attribute": "school_access",
-     "min_score": 60
-    }
-   ],
-   "amenity_needs": null,
-   "bathrooms": null,
-   "bedrooms": null,
-   "max_price": null,
-   "min_gross_yield": null,
-   "min_price": null,
-   "near_place": null,
-   "planning_needs": null,
-   "property_type": null,
-   "school_zone": null,
-   "sort_by": "school_access",
-   "suburb": null
-  },
+  "params": [
+   {
+    "abstract_needs": [
+     {
+      "attribute": "school_access",
+      "min_score": 60,
+      "operator": "gte",
+      "strength": "preferred",
+      "value_source": "inferred"
+     }
+    ],
+    "amenity_needs": null,
+    "bathrooms": null,
+    "bedrooms": null,
+    "max_price": null,
+    "min_gross_yield": null,
+    "min_price": null,
+    "near_place": null,
+    "planning_needs": null,
+    "property_type": null,
+    "school_zone": null,
+    "sort_by": null,
+    "suburb": null
+   },
+   {
+    "abstract_needs": [
+     {
+      "attribute": "school_access",
+      "min_score": 60,
+      "operator": "gte",
+      "strength": "preferred",
+      "value_source": "inferred"
+     }
+    ],
+    "amenity_needs": null,
+    "bathrooms": null,
+    "bedrooms": null,
+    "max_price": null,
+    "min_gross_yield": null,
+    "min_price": null,
+    "near_place": null,
+    "planning_needs": null,
+    "property_type": null,
+    "school_zone": null,
+    "sort_by": "school_access",
+    "suburb": null
+   },
+   {
+    "abstract_needs": [
+     {
+      "attribute": "school_access",
+      "min_score": 60,
+      "operator": "gte",
+      "strength": "preferred",
+      "value_source": "inferred"
+     }
+    ],
+    "amenity_needs": null,
+    "bathrooms": null,
+    "bedrooms": null,
+    "max_price": null,
+    "min_gross_yield": null,
+    "min_price": null,
+    "near_place": null,
+    "planning_needs": null,
+    "property_type": null,
+    "school_zone": null,
+    "sort_by": null,
+    "suburb": null
+   }
+  ],
   "unsupported": [
    [
     "学校排名"
@@ -613,16 +673,13 @@
   },
   "unsupported": [
    [
-    "驾车时间",
-    "到 CBD 的距离要求"
+    "步行/驾车时间"
    ],
    [
-    "驾车时间",
-    "到 CBD 的距离要求"
+    "步行/驾车时间"
    ],
    [
-    "驾车时间",
-    "到 CBD 的距离要求"
+    "步行/驾车时间"
    ]
   ]
  },

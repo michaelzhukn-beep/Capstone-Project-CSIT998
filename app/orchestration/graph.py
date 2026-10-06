@@ -219,6 +219,31 @@ def _parking_notice(state, kind: str | None) -> str | None:
     return None
 
 
+# 「走路到车站几分钟」「开车多久到 CBD」—— 问的是**时间**,本系统只有直线距离,没有路网。
+# 用确定性判据兜住,不靠模型自觉:单独问这句时模型常判成 concept,用常识泛泛作答,
+# 却不明说系统算不出(2026-10-06 50 题评估 g5)。
+_TRAVEL_TIME_ASK = "步行/驾车时间"
+_TRAVEL_TIME_RE = re.compile(
+    r"(步行|走路|走过去|走到|开车|驾车|坐车|车程).{0,12}(几分钟|多少分钟|多久|多长时间|\d+\s*分钟|分钟)"
+    r"|(几分钟|多少分钟|多久|多长时间|\d+\s*分钟).{0,8}(步行|走路|开车|驾车|车程)"
+    r"|\b(walk(?:ing)?|driv(?:e|ing))\b.{0,24}\b(minutes?|mins?|how long|time)\b"
+    r"|\b(minutes?|mins?|how long)\b.{0,24}\b(walk(?:ing)?|driv(?:e|ing))\b",
+    re.I)
+
+
+def _asks_travel_time(query: str | None) -> bool:
+    return bool(query and _TRAVEL_TIME_RE.search(query))
+
+
+def _travel_time_notice(state) -> str:
+    return _t(state,
+              "本系统所有距离都是**直线距离**,没有路网数据,算不出步行或驾车需要几分钟。"
+              "能回答的是「离 X 多远(直线)」,例如「离火车站 800 米内的两房」;房源卡片和详情里的距离也都是直线距离。",
+              "All distances in this system are **straight-line**; there is no road network, so walking or driving "
+              "time cannot be computed. What can be answered is \"how far from X (as the crow flies)\", e.g. "
+              "\"2-bed within 800 m of a train station\"; distances on the cards and in the details are straight-line too.")
+
+
 def _unsupported_list(state, asks) -> str:
     if _en(state):
         return ", ".join(_unsupported_en(a) for a in asks)
@@ -637,6 +662,12 @@ _PARSE_SYSTEM = (
 ) + refinement.PATCH_PROMPT
 assert "@@" not in _PARSE_SYSTEM, "提示词里还有没被替换掉的占位符"
 
+# 首轮被判成 about_results 时追加在上下文后面重问一次(见 parse_intent)。
+_FIRST_TURN_RETRY = ("\n\n注意:这是对话的第一句,**还没有任何搜索结果**,所以 intent 不可能是 about_results。"
+                     "「哪套…最高/最便宜」这类问题是要你去找房:intent 填 new_search,"
+                     "并把这句话里的条件(价格、房数、房型、区域、排序等)照常抽进对应字段;"
+                     "只是在问概念或公式时才填 concept。")
+
 
 def _extract_json(text: str) -> dict | None:
     """从模型输出里抠出 JSON。容忍代码块围栏和前后废话。"""
@@ -818,6 +849,11 @@ def _sanitize(raw: dict, user_query: str, *, preserve_property_parking=False,
         params["semantic_query"] = _without_derived_property_parking(params["semantic_query"], user_query) or "property"
         if params["description_query"]:
             params["description_query"] = _without_derived_property_parking(params["description_query"], user_query) or None
+    # 问了步行/驾车时间、模型却没登记(或写成别的说法)时,统一补成注册表里的那一条,
+    # 保证「没参与筛选」的说明一定出现,且中英文都能按注册表翻译。
+    if _asks_travel_time(user_query):
+        asks = [a for a in asks if not re.search(r"步行|走路|驾车|开车|walk|driv", a, re.I)]
+        asks.insert(0, _TRAVEL_TIME_ASK)
     params["unsupported_asks"] = asks[:6] or None      # 截断,防止模型灌一长串
 
     # 规划分区要求。词表之外的一律丢掉 —— 模型编一个 "no_noise" 出来,
@@ -994,7 +1030,23 @@ def parse_intent(state: State) -> dict:
     # 这类约束能用代码保证就别指望模型自觉。同理,没有上一轮条件时 refine
     # 也无从"在上一轮基础上改"。
     if intent == "about_results" and not state.get("metrics"):
-        intent = "new_search"
+        # 但**不能直接沿用这份输出的条件**:判成 about_results 时模型不填条件字段(about_results 用不到),
+        # 改走 new_search 就成了空条件的纯语义检索 —— 预算、房型被静默丢掉,用户毫不知情
+        # (50 题评估 m4:「60 万以下哪套的年租金最高」返回一批 60 万以上的房)。
+        # 明说「这是第一句」再问一次;仍判不出搜索条件就请用户换个说法,宁可不搜也不按错条件搜。
+        try:
+            retry = _extract_json(_ask(_PARSE_SYSTEM, _context_message(state) + _FIRST_TURN_RETRY))
+        except Exception:
+            retry = None
+        retry_intent = retry.get("intent").strip() if retry and isinstance(retry.get("intent"), str) else None
+        if retry_intent not in ("new_search", "refine", "concept", "clarify"):
+            return clarify(_t(state,
+                "这句话我没能确定要按哪些条件找房。为避免按错误的条件给出房源,这一轮没有检索。"
+                "请换个说法(例如「60 万以下、年租金最高的房子」),或用「+ 添加条件」直接设置。",
+                "I could not tell which conditions to search by, so nothing was searched this turn rather than "
+                "risk showing homes that ignore what you asked. Please rephrase (e.g. \"homes under $600k with the "
+                "highest annual rent\") or set conditions with \"+ Add a filter\"."))
+        raw, intent = retry, retry_intent
     # 第一句就说「最好离小学近一点」,模型常因「一点」判成 refine。没有上一轮可改时,
     # 以前直接拒绝(外部测试第 6 项);现在把这些修改应用到空条件上,当作新搜索。
     # 相对调整(「再便宜点」)没有基准仍会被 apply_changes 拒绝 —— 那确实无从算起。
@@ -1010,9 +1062,11 @@ def parse_intent(state: State) -> dict:
             return clarify()
 
     if intent in ("about_results", "concept"):
-        # 这两类不重新检索,参数保持上一轮不动(供输出时交代口径用)
+        # 这两类不重新检索,参数保持上一轮不动(供输出时交代口径用)。
+        # 问的是步行/驾车时间:确定性地说明做不到,不交给模型用常识绕过去。
+        notice = _travel_time_notice(state) if _asks_travel_time(user_query) else None
         return {"intent": intent, "params": state.get("params") or {},
-                "turn_notice": None, "refinement_base": None, "history": history}
+                "turn_notice": notice, "refinement_base": None, "history": history}
 
     if intent == "refine":
         try:
@@ -2112,8 +2166,15 @@ def _no_result_answer(params: dict, en: bool = False) -> str:
             lines.append("另外这几项本系统没有数据,**从一开始就没参与筛选**:"
                          + "、".join(params["unsupported_asks"]) + "。")
 
-    lines.append("This dataset covers Melbourne only. Try relaxing a filter or another suburb."
-                 if en else "本系统的数据集是墨尔本房源,不含其他城市。请放宽条件或换个区再试。")
+    # 「只有墨尔本」只在指定了区域时才说 —— 卡住的是价格或房数时,这句话虽然没错,
+    # 却把用户引向错误的原因(50 题评估 o4「5 万以下」、o9「25 房」)。
+    if params.get("suburb"):
+        lines.append("This dataset covers Melbourne only, so suburbs in other cities are not included. "
+                     "Check the suburb name or try another suburb."
+                     if en else "本系统的数据集只有墨尔本房源,不含其他城市的区。请核对区名或换个区再试。")
+    else:
+        lines.append(f"Try relaxing one of the conditions above ({detail})."
+                     if en else f"可以放宽上面的某个条件({detail})再试。")
     return "\n".join(lines)
 
 
