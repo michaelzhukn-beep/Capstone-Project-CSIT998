@@ -58,6 +58,7 @@ for imp in imported:
 for nm in sorted(need, key=lambda k: top[k].lineno):
     exec(compile(ast.Module([top[nm]], []), str(GRAPH), "exec"), ns)
 ns["i18n"] = types.SimpleNamespace(sort_labels_en=lambda d: d)
+ns.update({"answer_guard": __import__("types").SimpleNamespace(**__import__("runpy").run_path(str(__import__("pathlib").Path(__file__).resolve().parents[1] / "app/orchestration/answer_guard.py"))), "_dataset_suburbs": lambda: []})   # 纯函数模块,不碰 I/O;区名表要查库,这里给空表
 _Stub.loading = False
 rank, LIMIT = ns["rank"], ns["RESULT_LIMIT"]
 

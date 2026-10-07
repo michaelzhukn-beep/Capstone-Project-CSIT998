@@ -107,7 +107,7 @@ def make_graph(db, L, opex=0.28, fees=2000):
         return {"metrics": out}
     _Stub.loading = True          # module-level statements may call stubs while loading (e.g. registry.sort_labels())
     G = load(ROOT / "app/orchestration/graph.py", ["rank", "_rank_once", "search", "CANDIDATE_LIMIT", "ROI_EXPAND_CAP", "RESULT_LIMIT", "_SQL_ORDER", "SEARCH_KEYS", "RANK_KEYS"])
-    G.update({"search_properties": db.search_properties, "analyze": analyze, "enrich": lambda s: {"metrics": s["metrics"], "place_lookup": None, "zone_lookup": None},
+    G.update({"answer_guard": __import__("types").SimpleNamespace(**__import__("runpy").run_path(str(__import__("pathlib").Path(__file__).resolve().parents[1] / "app/orchestration/answer_guard.py"))), "_dataset_suburbs": lambda: [], "search_properties": db.search_properties, "analyze": analyze, "enrich": lambda s: {"metrics": s["metrics"], "place_lookup": None, "zone_lookup": None},
               "assumptions": types.SimpleNamespace(opex_rate=lambda: opex, other_acquisition_costs=lambda: fees, snapshot=lambda: {"opex_rate": opex, "other_acquisition_costs": fees}),
               "deepcopy": __import__("copy").deepcopy, "investment_metrics": inv,
               "roi_unrounded": F["roi_unrounded"], "roi_certified_prefix": F["roi_certified_prefix"], "i18n": types.SimpleNamespace(sort_labels_en=lambda d: d),

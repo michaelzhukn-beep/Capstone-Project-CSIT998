@@ -71,7 +71,8 @@ with patch.object(g, '_ask', side_effect=fake_ask), patch.object(g, '_ask_stream
 
     # An impossible filter edit must restore both the state and streamed cards, with no LLM summary.
     impossible = deepcopy(current['params'])
-    impossible['abstract_needs'] = [{'attribute':'quiet','operator':'gt','min_score':100}]
+    # 「必须」才硬筛;「优先」的不可能分数只会排序并注明 0 套满足,不会触发恢复(2026-10-07 相对目标不再跨轮继承)
+    impossible['abstract_needs'] = [{'attribute':'quiet','operator':'gt','min_score':100,'strength':'required'}]
     with patch.object(g, '_ask_streaming', side_effect=AssertionError('no-result must bypass LLM')):
         no_match = events(client.post('/api/refine', json={'thread_id':thread,'params':impossible}))
     after = server.GRAPH.get_state(g.new_session(thread)).values

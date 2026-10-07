@@ -90,7 +90,7 @@ def fake_ask(system, user, temperature=0.0):
 _Stub.loading = True
 G = load(GRAPH, ["explain", "_assumption_lines"], pre=PRE,
          post={"_ask_streaming": fake_ask, "assumptions": FAKE_ASSUMPTIONS, "refinement": PRE["refinement"], "i18n": PRE["i18n"],
-               "_typo_source": lambda s, q: None})
+               "_typo_source": lambda s, q: None, "answer_guard": __import__("types").SimpleNamespace(**__import__("runpy").run_path(str(__import__("pathlib").Path(__file__).resolve().parents[1] / "app/orchestration/answer_guard.py"))), "_dataset_suburbs": lambda: []})
 _Stub.loading = False
 
 def run_explain(metrics, query, intent="new_search", lang="zh", raise_llm=False):

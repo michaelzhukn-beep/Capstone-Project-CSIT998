@@ -36,7 +36,7 @@ from app.analytics.valuation import predict_values
 from app.core.config import require_llm_config
 from app import i18n
 from app.search.search import properties_by_ids, search_properties
-from app.orchestration import refinement
+from app.orchestration import answer_guard, refinement
 
 # ---------------------------------------------------------------- 状态
 
@@ -1200,6 +1200,24 @@ def search(state: State) -> dict:
 
 # ---------------------------------------------------------------- 节点 3:analyze
 
+_SUBURB_CACHE: dict = {}     # 数据集区名缓存(见 _dataset_suburbs)
+
+
+def _dataset_suburbs() -> list[str]:
+    """数据集里的全部区名(原始大小写)。只用于发现「原话提到、却没进入检索条件」的区;
+    查不到数据库就返回空表 —— 那一项检查跳过,不影响检索本身。"""
+    if "names" not in _SUBURB_CACHE:
+        try:
+            from app.core.db import get_connection
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT DISTINCT suburb FROM properties WHERE suburb IS NOT NULL")
+                _SUBURB_CACHE["names"] = [row[0] for row in cur.fetchall()]
+        except Exception:
+            return []
+    return _SUBURB_CACHE["names"]
+
+
 def _rent_sources(ids) -> dict:
     """id -> rent_source。查不到(比如测试里的假房源没有 id)就返回空,不猜。"""
     ids = [i for i in ids if isinstance(i, int)]
@@ -1753,6 +1771,9 @@ def _rank_once(state: State) -> dict:
         metrics = ranked
         if not metrics:
             return _no_match(state, notes, relative=True, hint=_tradeoff_hint(state, params, goals))
+        # 先定下最终展示顺序,再算评分变化:否则说明里的中位数取自重排前的 5 套,和卡片、
+        # 和交给说明模型的数字对不上(实测一处写 80、一处写 81)。偏好说明插在最前,调用早晚不影响顺序。
+        metrics = _prefer_amenities(state, metrics, notes, abstract=False)
         labels = [_attr_label(state, g["field"]) if g["field"] in _ABSTRACT_KEYS
                   else ({"price": "价格", "near_place_distance": "到指定地点的距离"}.get(g["field"], g["field"])
                         if not _en(state) else g["field"].replace("_", " ")) for g in goals]
@@ -1779,7 +1800,6 @@ def _rank_once(state: State) -> dict:
             sparse = _t(state, f"只有 {len(metrics)} 套能在保留现有条件的同时完成这次调整。",
                         f"Only {len(metrics)} listing(s) can make this adjustment while keeping your filters.")
             adjust += [sparse] + [x for x in [_tradeoff_hint(state, new_params or params, goals)] if x]
-        metrics = _prefer_amenities(state, metrics, notes, abstract=False)
         out = {"metrics": metrics[:RESULT_LIMIT], "more": metrics[:RESULT_LIMIT * 4],
                "batch_offset": 0, "ranking": ";".join(adjust + notes), "turn_notice": None,
                "refinement_base": None}
@@ -1946,7 +1966,54 @@ def rank(state: State) -> dict:
         out = _rank_once(current)
     if expanded:     # 下游(present/explain)要看到的是最后一轮的候选池、检索口径和 roi_pool
         extra.update(properties=current["properties"], search_order=current["search_order"], roi_pool=current["roi_pool"])
+    if not out.get("turn_notice"):
+        # 没用上的条件放最前面;前后对比放最后 —— 门槛让步那条按决定必须是第一条(见 DECISIONS)
+        parts = _ignored_notes(state) + ([out["ranking"]] if out.get("ranking") else []) + _change_notes(state, out)
+        if parts:
+            out["ranking"] = ";".join(parts)
     return {**extra, **out}
+
+
+def _ignored_notes(state: State) -> list[str]:
+    """新搜索:原话里提到、却没有进入检索条件的区名/卧室数/预算(外部测试报告第 3 项)。
+    以前这些被静默丢掉,说明甚至会说「Carlton 没有合适的」—— Carlton 根本没搜。"""
+    if state.get("intent") != "new_search" or not state.get("user_query"):
+        return []
+    notes = answer_guard.ignored_conditions(state.get("user_query"), state.get("params") or {}, _dataset_suburbs())
+    return [_t(state, zh, en) for zh, en in notes]
+
+
+def _change_notes(state: State, out: dict) -> list[str]:
+    """追问修改后,与**上一轮展示的房源**相比价格中位数和相关评分中位数怎么变 —— 程序算、方向写死。
+    外部测试报告第 2 项:模型自己比较时把「上升」说成「下降」,还拿第一轮的旧数字比。"""
+    base = state.get("refinement_base") or {}
+    before, after = (base.get("metrics") or [])[:RESULT_LIMIT], (out.get("metrics") or [])[:RESULT_LIMIT]
+    if state.get("intent") != "refine" or not before or not after:
+        return []
+
+    def word(old, new, tol):
+        if abs(new - old) <= tol:
+            return _t(state, "不变", "unchanged")
+        return _t(state, "上升", "up") if new > old else _t(state, "下降", "down")
+
+    parts = []
+    b, a = refinement.baseline_for(before, "price"), refinement.baseline_for(after, "price")
+    if b is not None and a is not None:
+        parts.append(_t(state, f"价格中位 ${b:,.0f}→${a:,.0f}({word(b, a, b * 0.005)})",
+                        f"median price ${b:,.0f}→${a:,.0f} ({word(b, a, b * 0.005)})"))
+    moving = {g["field"] for g in (state.get("params") or {}).get("relative_preferences") or []}
+    for need in (state.get("params") or {}).get("abstract_needs") or []:
+        field = need["attribute"]
+        if field in moving:
+            continue                      # 相对调整的属性由 _score_shift 交代,不重复
+        b, a = refinement.baseline_for(before, field), refinement.baseline_for(after, field)
+        if b is not None and a is not None:
+            parts.append(_t(state, f"「{_attr_label(state, field)}」中位 {b:.0f}→{a:.0f}({word(b, a, 0.5)})",
+                            f"“{_attr_label(state, field)}” median {b:.0f}→{a:.0f} ({word(b, a, 0.5)})"))
+    if not parts:
+        return []
+    return [_t(state, "与上一轮展示的房源相比:", "Compared with the previous results: ")
+            + _t(state, ",", ", ").join(parts)]
 
 
 # ---------------------------------------------------------------- 节点 5:present
@@ -2348,12 +2415,31 @@ def explain(state: State) -> dict:
         context.append(f"⚠️ {lookup['error']} —— 必须如实告诉用户没找到这个地点,"
                        "不要假装算过到它的距离。")
 
+    ignored = _ignored_notes(state)
+    if ignored:
+        context.append("⚠️ 以下内容**没有进入本次检索**(程序检测到的,排序口径里也写了)。必须在结论里提一句,"
+                       "并且**绝对不能**说这些条件下「没有房源 / 没有合适的」—— 根本没有搜过:\n"
+                       + "\n".join(f"  - {n}" for n in ignored))
+    if intent == "refine":
+        context.append("说到本轮相对上一轮的变化(价格、评分的升降)时,只能引用排序口径里"
+                       "「与上一轮展示的房源相比」「评分变化」这两条程序算好的数字,方向照抄;"
+                       "排序口径里没有的变化不要说,也不要拿更早几轮的数字比较。")
+    comparisons = answer_guard.comparison_facts(numbered, _en(state))
+    context.append("程序算好的比较结论(按卡片编号)。凡是「最便宜 / 最贵 / 离 CBD 最近或最远 / 土地最大 / "
+                   "唯一有土地记录 / 回报最高或最低 / 最安静」以及估值高于还是低于售价,**只能照这里说**;"
+                   "这里没有的维度不要做「最…」「唯一」的比较。程序会逐句核对,对不上的整句会被删掉:\n"
+                   + "\n".join(f"  - {line}" for line in comparisons))
     context.append(f"本次测算所依据的假设(提到 NOI / Cap Rate / ROI 时必须点明):\n{assumption_lines}")
     context.append(f"已算好的房源数据:\n{facts}")
 
     try:
         system = _EXPLAIN_SYSTEM + (_EXPLAIN_LANG_EN if _en(state) else "")
         answer = _ask_streaming(system, "\n\n".join(context), temperature=0.2)
+        # 模型写完后逐句核对最值说法,和数据对不上的整行删掉(外部测试报告第 1 项)。
+        # 流式过程中用户可能已看到原句;节点结束时发出的最终回答会替换掉它。
+        answer, removed = answer_guard.strip_false_comparisons(answer, numbered)
+        if removed and not answer:
+            answer = _t(state, "几套之间的比较:\n", "How these compare:\n") + "\n".join(f"- {c}" for c in comparisons)
     except Exception as exc:
         # LLM 挂了不该让整个回答消失 —— 房源和指标已经算出来了,照常展示,
         # 只是少一段人话说明。

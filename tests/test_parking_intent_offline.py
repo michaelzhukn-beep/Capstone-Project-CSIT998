@@ -39,7 +39,8 @@ n = load(GRAPH, {"_PROPERTY_PARKING_ASK", "_PROPERTY_PARKING_LABELS", "_PUBLIC_P
                  "_without_property_parking", "_without_derived_property_parking", "_unsupported_en",
                  "_parking_notice", "_sanitize", "_unsupported_list", "prepare_refinement", "parse_intent", "explain",
                  "_explain_fact", "_EXPLAIN_HIDDEN", "area_suspect",
-                 "_TRAVEL_TIME_ASK", "_TRAVEL_TIME_RE", "_asks_travel_time", "_travel_time_notice", "_FIRST_TURN_RETRY"},
+                 "_TRAVEL_TIME_ASK", "_TRAVEL_TIME_RE", "_asks_travel_time", "_travel_time_notice", "_FIRST_TURN_RETRY",
+                 "_ignored_notes", "RESULT_LIMIT"},
          {"re": re, "json": json, "State": dict,
           "_t": lambda state, zh, en: en if state.get("lang") == "en" else zh,
           "_en": lambda state: state.get("lang") == "en",
@@ -53,7 +54,7 @@ n = load(GRAPH, {"_PROPERTY_PARKING_ASK", "_PROPERTY_PARKING_LABELS", "_PUBLIC_P
           "refinement": types.SimpleNamespace(valid_goals=lambda _: [], baseline_for=lambda *_: None),
           "_valuation_direction": lambda _q, sort: sort, "_typo_source": lambda *_: None,
           "_no_result_answer": lambda *_: "NO RESULTS", "_assumption_lines": lambda *_: [],
-          "_EXPLAIN_SYSTEM": "FAKE", "_EXPLAIN_LANG_EN": "", "_context_message": lambda *_: "", "_PARSE_SYSTEM": "FAKE"})
+          "_EXPLAIN_SYSTEM": "FAKE", "_EXPLAIN_LANG_EN": "", "answer_guard": __import__("types").SimpleNamespace(**__import__("runpy").run_path(str(__import__("pathlib").Path(__file__).resolve().parents[1] / "app/orchestration/answer_guard.py"))), "_dataset_suburbs": lambda: [], "_context_message": lambda *_: "", "_PARSE_SYSTEM": "FAKE"})
 kind, strip, sanitize = n["_parking_kind"], n["_without_property_parking"], n["_sanitize"]
 
 public = ("near a public car park", "靠近公共停车场", "附近有停车位", "near The Garage Cafe", "Parking Overlay houses")

@@ -246,6 +246,8 @@ async def _run(thread_id: str, inputs, config, lang: str = "zh", refinement=None
                 # 读旧条件、更新参数和执行检索必须在同一把锁内,失败可恢复整轮结果。
                 clean = g.prepare_refinement(refinement.params, previous.get("params") or {},
                                              refinement.removed_attributes)
+                # 条件卡修改是新的一轮:上一轮的相对调整(再便宜点)及其旧基准不再参与(见 refinement.apply_changes)
+                clean["relative_preferences"] = None
                 change = "(通过条件卡修改,以这些条件为准,未列出的旧偏好不再使用): " + json.dumps(clean, ensure_ascii=False)
                 GRAPH.update_state(config,
                     {"user_query": change, "intent": "refine", "params": clean,

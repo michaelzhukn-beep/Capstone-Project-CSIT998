@@ -75,6 +75,8 @@ ATTR_STEPS = {"slight": (10, 15), "normal": (15, 25), "strong": (25, 40)}
 # 系统推断的反向门槛每轮最多让 AUTO_STEP 分,最低到 AUTO_FLOOR。
 # 评分约以 50 为全库中位水平,再低就称不上「热闹/安静」,必须由用户确认。
 AUTO_STEP, AUTO_FLOOR = 10, 50
+# 相对调整时价格偏离上一轮中位的代价权重:偏 10% 记 0.5,与属性步幅的偏差(0~0.5)同一量级
+PRICE_HOLD = 5
 
 
 class ClarifyChange(ValueError):
@@ -191,7 +193,11 @@ def apply_changes(previous, changes, query, rows, sanitize, sort_fields):
     changes = normalize_amenity_changes(changes, previous)
     params = deepcopy(previous)
     params.pop("_conflict", None)
-    goals = valid_goals(params.get("relative_preferences"))
+    # 相对调整(再便宜点 / 再安静一点)只在提出它的那一轮生效,基准是上一轮实际展示的结果。
+    # 以前上一轮的目标连同它的旧基准一起被继承:第一轮的 $520,000、安静 68 在之后每一轮都还在
+    # 参与排序,说明也拿它当「上一轮」去比(外部测试报告第 2 项)。上一轮的效果已经体现在
+    # 现在展示的房源里,不需要再背着旧基准往下推。
+    goals = []
     # 同一句里「稍微安静点,但还是要热闹」:对反向属性的 prioritize 只是重申保留它
     # (热闹词条本来就不会删),不能按热闹排序把本轮的「更安静」清掉。与操作先后无关。
     relative_now = {c.get("field") for c in changes if isinstance(c, dict) and c.get("action") == "relative"}
@@ -345,6 +351,10 @@ IQR 是当前兼容候选的离散程度。属性/价格的保护上限限制稀
         anchor = baseline_for(previous_rows, field)
         if field not in moving and anchor is not None:
             anchors.append((field, anchor, need.get("operator", "gte")))
+    # 用户没要求动价格时,价格尽量贴着上一轮展示的水平(软约束,不剔除)。上一轮的「再便宜点」不再
+    # 跨轮继承(见 apply_changes),没有这条的话「再安静一点」会把价格中位从 39 万推到 61 万 ——
+    # 用户只要求安静,却看到价格翻倍(外部测试报告第 2 项「只有用户要求的那一项变」)。
+    price_anchor = None if "price" in moving else baseline_for(previous_rows, "price")
     selected = []
     for index, row in enumerate(rows):
         cost = 0
@@ -361,5 +371,8 @@ IQR 是当前兼容候选的离散程度。属性/价格的保护上限限制稀
                     loss = (anchor - value if op in ("gte", "gt") else
                             value - anchor if op in ("lte", "lt") else abs(value - anchor))
                     cost += max(0, loss) / 10
+            price = value_of(row, "price")
+            if price_anchor and price is not None:
+                cost += abs(price - price_anchor) / price_anchor * PRICE_HOLD
             selected.append((cost, index, row))
     return [row for _, _, row in sorted(selected, key=lambda x: (x[0], x[1]))]

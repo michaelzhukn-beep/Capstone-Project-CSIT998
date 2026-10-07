@@ -114,7 +114,7 @@ def make_graph(db, box, L, near=None, zone_found=None, place_err=None):
                 "zone_lookup": ({"query": "z", "found": zone_found, "error": None} if zone_found is not None else None)}
     _Stub.loading = True
     G = load(ROOT / "app/orchestration/graph.py", ["rank", "_rank_once", "search", "analyze", "CANDIDATE_LIMIT", "ROI_EXPAND_CAP", "RESULT_LIMIT", "_SQL_ORDER", "SEARCH_KEYS", "RANK_KEYS"])
-    G.update({"deepcopy": __import__("copy").deepcopy, "search_properties": db.search_properties, "enrich": enrich, "assumptions": box, "investment_metrics": inv,
+    G.update({"answer_guard": __import__("types").SimpleNamespace(**__import__("runpy").run_path(str(__import__("pathlib").Path(__file__).resolve().parents[1] / "app/orchestration/answer_guard.py"))), "_dataset_suburbs": lambda: [], "deepcopy": __import__("copy").deepcopy, "search_properties": db.search_properties, "enrich": enrich, "assumptions": box, "investment_metrics": inv,
               "roi_unrounded": F["roi_unrounded"], "roi_certified_prefix": F["roi_certified_prefix"], "i18n": types.SimpleNamespace(sort_labels_en=lambda d: d),
               "predict_values": lambda rows: [{"predicted_price": r["price"], "is_stub": False, "typical_error_pct": 0.09, "range_low": r["price"], "range_high": r["price"],
                                                "interval_level": None, "interval_low": None, "interval_high": None, "interval_coverage": None, "cross_fitted": True} for r in rows],
@@ -245,6 +245,7 @@ check("语义相关" in t_gy, "non-ROI order keeps the original wording (no regr
 import json
 _Stub.loading = True
 GE = load(ROOT / "app/orchestration/graph.py", ["explain", "_assumption_lines", "_EXPLAIN_SYSTEM", "_EXPLAIN_LANG_EN"])      # one namespace, so the helper sees the injected fakes
+GE.update({"answer_guard": __import__("types").SimpleNamespace(**__import__("runpy").run_path(str(__import__("pathlib").Path(__file__).resolve().parents[1] / "app/orchestration/answer_guard.py"))), "_dataset_suburbs": lambda: []})
 _Stub.loading = False
 seen = {}
 
