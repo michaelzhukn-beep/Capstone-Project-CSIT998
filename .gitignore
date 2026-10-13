@@ -89,3 +89,4 @@ design/white-city-try/**/backup-*/**
 
 # Final report drafts (contain student numbers; keep out of the public repo)
 /report/
+/report_*/

@@ -117,6 +117,7 @@ See [docs/en/DEVELOPMENT.md](docs/en/DEVELOPMENT.md#tests) for the full test lis
 | [`docs/en/CONFIGURATION.md`](docs/en/CONFIGURATION.md) | Switching the LLM provider / key, all `.env` settings, assumptions |
 | [`docs/en/DEVELOPMENT.md`](docs/en/DEVELOPMENT.md) | Project layout, how a request flows, HTTP API, tests, rebuilding the data |
 | [`docs/en/TROUBLESHOOTING.md`](docs/en/TROUBLESHOOTING.md) | Common setup problems and fixes |
+| [`docs/en/REPORT_GUIDE.md`](docs/en/REPORT_GUIDE.md) | Final report revision: areas, what to check in the code, competitor findings |
 | [`AGENTS.md`](AGENTS.md) | Rules for anyone (human or AI agent) changing the code |
 | `docs/*.md` (Chinese) | Project state, architecture, design decisions; the team's engineering record |
 | `NOTES_FOR_SUPERVISOR.md` (Chinese) | Long-form rationale, measurements and dead ends |

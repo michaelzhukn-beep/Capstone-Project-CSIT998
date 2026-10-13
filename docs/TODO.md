@@ -3,11 +3,15 @@
 > 当前工作队列。状态必须和代码一致:做完了就移走,没做就不许标 Done。
 > 写入规则见 `AGENTS.md` §4。
 
-最后更新:2026-10-06
+最后更新:2026-10-13
 
 ---
 
 ## Now
+
+- [ ] **A3 终期报告(18 日 23:55 截止):各责任区在 v1.3 上修改,定稿后转 LaTeX。** v1.3(Word,9 章,版式同 proposal 模板,34 页)在所有者本机 `report/` 与组内 OneDrive,不入仓库(含学号)。各区章节、要核对的代码、不得改回的事实修正与待办见 `docs/en/REPORT_GUIDE.md`;分区决定见 DECISIONS。待办:6.3 用户流程与英文图 2(前端)、2.1/2.4/表 1 按竞品实测重写并同步 1.1(测试与评估)、表 13 日期(项目管理)、表 15 全员。定稿后用模板 `998/proposal_package/proposal_package/Assignment2.tex` 转 LaTeX、编译核对 ≥32 页;提交 GroupXX.pdf + GroupXX.zip(latex/ 可编译、source/、resources/),附录 B 填提交哈希与 SHA-256。
+
+- [ ] **A4 演示视频(25 日截止,≤10 分钟、MP4 ≤100MB、必须有字幕,否则扣分)。** 现有 `report/demo_video/Nestwise_demo_v2_en.mp4` 只是无声演示段(4:48,21 张讲解卡,无旁白无字幕)。按导师与组员意见改:演示改为四个主题(One sentence / Understands / One screen / Traceable)的大字标题 + 分步讲解,讲解卡大幅减少,每个功能先让观众看清整个界面再聚焦;删注册登录。前面加按责任区分段的项目介绍(配幻灯片),全片组员配音并加字幕。录制脚本在 `report/demo_video/tools/record2.mjs`(本机)。
 
 - [ ] **iPhone 沙盘兼容实机复测。** 加载后系统整页“重复出现问题”的根因未证实;第一轮保留资产与视觉参数的峰值控制已通过有限 Chrome 核验。用 `?background-status=1&v=ios-20261003-3` 观察,失败先回报,不得用桌面通过代替实机完成。证据 `D:\capstone-logs\ios-memory-20261003`。
 - [ ] **所有者在真实浏览器里验收首屏沙盘、多轮修改与新地图,以及 2026-10-05/06 的 10 项修复与「优先/必须」。**
